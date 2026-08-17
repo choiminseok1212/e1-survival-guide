@@ -1,5 +1,5 @@
 /* 오프라인 캐시. 파일을 수정하면 CACHE 이름의 버전 숫자를 올리세요. */
-var CACHE = 'e1sg-v2';
+var CACHE = 'e1sg-v3';
 var ASSETS = [
   './',
   './index.html',

@@ -21,14 +21,49 @@
     { id: 'cpt', short: '대', name: '대위', tier: 10, cls: 'r6' }
   ];
 
-  var LEAVE_TYPES = ['휴가', '외박', '외출', '병가', '기타'];
+  /* 부재 종류. '파견'은 인원보고에서 휴가와 따로 집계한다. */
+  var LEAVE_TYPES = ['휴가', '외박', '외출', '병가', '파견', '기타'];
+  var DISPATCH_TYPE = '파견';
 
   var DOW = ['일', '월', '화', '수', '목', '금', '토'];
+
+  /* 생활관 사로표: 2열 × 6행 = 12칸, 이 중 11사로까지 사용 */
+  var SARO_COLS = 2;
+  var SARO_ROWS = 6;
+  var SARO_MAX = 11;
+  var SARO_CELLS = SARO_COLS * SARO_ROWS;
+
+  var MEALS = [
+    { id: 'b', name: '아침', label: '아침식사집합' },
+    { id: 'l', name: '점심', label: '점심식사집합' },
+    { id: 'd', name: '저녁', label: '저녁식사집합' }
+  ];
+
+  function defaultServing() {
+    return {
+      count: 4,                                      // 총 배식 수
+      step: 10,                                      // 배식 간격(분)
+      autoRotate: true,                              // 주마다 순번 회전
+      anchor: todayKey(),                            // 회전 기준 주
+      order: { b: 4, l: 4, d: 4 },                   // 기준 주의 우리 배식 순번
+      base: { b: '08:00', l: '11:30', d: '17:30' }   // 1배식 시각
+    };
+  }
+
+  function defaultTimes() {
+    return {
+      morningRoll: '07:30',   // 아침점호
+      roomReport: '20:30',    // 생활관 인원보고
+      eveningRoll: '21:00',   // 저녁점호집합
+      nightWatch: '23:00',    // 불침번 보고
+      wakeLead: 10            // 기상 예고 (분)
+    };
+  }
 
   function defaultDuties() {
     return [
       {
-        id: 'd_bul', name: '불침번', kind: 'slots',
+        id: 'd_bul', name: '불침번', kind: 'slots', report: true,
         slots: [
           { id: 'b1', label: '1번초', start: '22:00', end: '23:30', need: 2 },
           { id: 'b2', label: '2번초', start: '23:30', end: '01:00', need: 2 },
@@ -38,7 +73,7 @@
         ]
       },
       {
-        id: 'd_cctv', name: 'CCTV', kind: 'slots',
+        id: 'd_cctv', name: 'CCTV', kind: 'slots', report: true,
         slots: [
           { id: 'c1', label: '주간 1', start: '08:00', end: '12:00', need: 1 },
           { id: 'c2', label: '주간 2', start: '12:00', end: '16:00', need: 1 },
@@ -49,7 +84,7 @@
         ]
       },
       {
-        id: 'd_gate', name: '위병소', kind: 'slots',
+        id: 'd_gate', name: '위병소', kind: 'slots', report: true,
         slots: [
           { id: 'g1', label: '1교대', start: '08:00', end: '12:00', need: 2 },
           { id: 'g2', label: '2교대', start: '12:00', end: '16:00', need: 2 },
@@ -60,11 +95,11 @@
         ]
       },
       {
-        id: 'd_flash', name: '번개조', kind: 'day',
+        id: 'd_flash', name: '번개조', kind: 'day', report: false,
         slots: [{ id: 'f1', label: '대기', start: '', end: '', need: 3 }]
       },
       {
-        id: 'd_duty', name: '당직', kind: 'day',
+        id: 'd_duty', name: '당직', kind: 'day', report: true,
         slots: [
           { id: 't1', label: '당직사관', start: '', end: '', need: 1 },
           { id: 't2', label: '당직병', start: '', end: '', need: 1 }
@@ -76,10 +111,19 @@
   /* ==================== 상태 ==================== */
 
   var S = load();
-  var UI = { tab: 'today', date: todayKey(), month: monthKey(new Date()) };
+  var UI = {
+    tab: 'today', date: todayKey(), month: monthKey(new Date()),
+    rosterMode: 'list',   // 명단 | 사로표
+    scopeRoom: null       // 한장 요약에서 선택한 생활관 (null = 소대 전체)
+  };
 
   function blankState() {
-    return { v: 1, unit: '', meId: null, members: [], duties: defaultDuties(), assign: {}, leaves: [] };
+    return {
+      v: 1, unit: '', meId: null,
+      members: [], rooms: [], duties: defaultDuties(),
+      assign: {}, leaves: [], daily: {},
+      serving: defaultServing(), times: defaultTimes()
+    };
   }
 
   function load() {
@@ -92,9 +136,19 @@
       base.unit = s.unit || '';
       base.meId = s.meId || null;
       base.members = Array.isArray(s.members) ? s.members : [];
+      base.rooms = Array.isArray(s.rooms) ? s.rooms : [];
       base.duties = Array.isArray(s.duties) && s.duties.length ? s.duties : defaultDuties();
       base.assign = s.assign && typeof s.assign === 'object' ? s.assign : {};
       base.leaves = Array.isArray(s.leaves) ? s.leaves : [];
+      base.daily = s.daily && typeof s.daily === 'object' ? s.daily : {};
+      /* 이전 버전에서 올라온 데이터에 새 설정 채우기 */
+      base.serving = merge(defaultServing(), s.serving);
+      base.serving.order = merge(defaultServing().order, s.serving && s.serving.order);
+      base.serving.base = merge(defaultServing().base, s.serving && s.serving.base);
+      base.times = merge(defaultTimes(), s.times);
+      base.duties.forEach(function (d) {
+        if (typeof d.report !== 'boolean') d.report = true;
+      });
       return base;
     } catch (e) {
       return blankState();
@@ -110,6 +164,18 @@
   }
 
   /* ==================== 유틸 ==================== */
+
+  /** 기본값 위에 저장된 값을 얹는다 (없는 키는 기본값 유지). */
+  function merge(def, over) {
+    var out = {};
+    Object.keys(def).forEach(function (k) { out[k] = def[k]; });
+    if (over && typeof over === 'object') {
+      Object.keys(over).forEach(function (k) {
+        if (over[k] !== null && over[k] !== undefined && k in def) out[k] = over[k];
+      });
+    }
+    return out;
+  }
 
   function uid(p) {
     return (p || 'x') + '_' + Math.random().toString(36).slice(2, 9);
@@ -312,6 +378,273 @@
       }
     }
     return null;
+  }
+
+  /* ==================== 생활관 · 사로 ==================== */
+
+  function room(id) {
+    for (var i = 0; i < S.rooms.length; i++) if (S.rooms[i].id === id) return S.rooms[i];
+    return null;
+  }
+
+  function roomName(id) {
+    var r = room(id);
+    return r ? r.name : '생활관 미지정';
+  }
+
+  function membersInRoom(id) {
+    return roster().filter(function (m) { return (m.roomId || null) === id; });
+  }
+
+  /** roomId 가 null 이면 소대 전체 */
+  function scopeList(roomId) {
+    return roomId ? membersInRoom(roomId) : roster();
+  }
+
+  function saroOccupant(roomId, n) {
+    var list = membersInRoom(roomId);
+    for (var i = 0; i < list.length; i++) if (+list[i].saro === n) return list[i];
+    return null;
+  }
+
+  /** 사로 배정. 이미 누가 있으면 그 사람의 사로를 비운다. */
+  function setSaro(memberId, roomId, n) {
+    var m = member(memberId);
+    if (!m) return;
+    if (n) {
+      var prev = saroOccupant(roomId, n);
+      if (prev && prev.id !== memberId) prev.saro = null;
+    }
+    m.roomId = roomId || null;
+    m.saro = n || null;
+    save();
+  }
+
+  /* ==================== 시각 유틸 ==================== */
+
+  function hmToMin(hm) {
+    var p = String(hm || '00:00').split(':');
+    return (+p[0] || 0) * 60 + (+p[1] || 0);
+  }
+
+  function minToHm(min) {
+    min = ((min % 1440) + 1440) % 1440;
+    return pad(Math.floor(min / 60)) + ':' + pad(min % 60);
+  }
+
+  function addMin(hm, n) {
+    return minToHm(hmToMin(hm) + n);
+  }
+
+  function atTime(dateKey, hm) {
+    var d = fromKey(dateKey);
+    d.setMinutes(hmToMin(hm));
+    return d;
+  }
+
+  function fmtHm(d) {
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  /* ==================== 배식 순번 ==================== */
+
+  /** 월요일 시작 주의 첫날 */
+  function weekStartKey(k) {
+    var d = fromKey(k);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return toKey(d);
+  }
+
+  /** 주마다 한 칸씩 밀린다 (설정에서 끌 수 있음) */
+  function servingNo(mealId, dateKey) {
+    var cfg = S.serving;
+    var cnt = Math.max(1, +cfg.count || 1);
+    var base = Math.min(cnt, Math.max(1, +cfg.order[mealId] || 1));
+    if (!cfg.autoRotate) return base;
+    var weeks = Math.round(
+      (fromKey(weekStartKey(dateKey)) - fromKey(weekStartKey(cfg.anchor || dateKey))) / (7 * 86400000)
+    );
+    return ((base - 1 + weeks) % cnt + cnt) % cnt + 1;
+  }
+
+  function servingTime(mealId, dateKey) {
+    return addMin(S.serving.base[mealId], (servingNo(mealId, dateKey) - 1) * (+S.serving.step || 10));
+  }
+
+  /* ==================== 그날의 수동 입력 ==================== */
+
+  function dailyBlank() {
+    return { seonsik: [], chuimin: [], yeondeung: [], temp: {}, notes: {} };
+  }
+
+  /** 읽기 전용 (저장소를 건드리지 않음) */
+  function dailyGet(dateKey) {
+    return merge(dailyBlank(), S.daily[dateKey]);
+  }
+
+  /** 수정용 (없으면 만든다. 호출한 쪽에서 save()) */
+  function dailyEdit(dateKey) {
+    if (!S.daily[dateKey]) S.daily[dateKey] = dailyBlank();
+    var d = S.daily[dateKey];
+    if (!Array.isArray(d.seonsik)) d.seonsik = [];
+    if (!Array.isArray(d.chuimin)) d.chuimin = [];
+    if (!Array.isArray(d.yeondeung)) d.yeondeung = [];
+    if (!d.temp) d.temp = {};
+    if (!d.notes) d.notes = {};
+    return d;
+  }
+
+  /* ==================== 인원 집계 ==================== */
+
+  /**
+   * 기준 시각의 인원 현황.
+   * opts.seonsik / opts.yeondeung 가 true 면 그 인원을 현재원에서 뺀다.
+   */
+  function counts(dateKey, hm, roomId, opts) {
+    opts = opts || {};
+    var list = scopeList(roomId);
+    var inScope = {};
+    list.forEach(function (m) { inScope[m.id] = 1; });
+
+    var leave = [], dispatch = [], absent = {};
+    list.forEach(function (m) {
+      var lv = leaveOn(m.id, dateKey);
+      if (!lv) return;
+      if (lv.type === DISPATCH_TYPE) dispatch.push(m.id);
+      else leave.push(m.id);
+      absent[m.id] = 1;
+    });
+
+    var when = atTime(dateKey, hm);
+    var taken = {}, byType = [], dutyIds = [];
+    S.duties.forEach(function (d) {
+      if (!d.report) return;
+      var hit = [];
+      d.slots.forEach(function (sl) {
+        [addDays(dateKey, -1), dateKey].forEach(function (dk) {
+          var w = slotWindow(dk, sl);
+          var on = w ? (when >= w[0] && when < w[1]) : (dk === dateKey);
+          if (!on) return;
+          assignedIds(dk, d.id, sl.id).forEach(function (id) {
+            if (!inScope[id] || absent[id] || taken[id]) return;
+            taken[id] = 1;
+            hit.push(id);
+          });
+        });
+      });
+      if (hit.length) {
+        byType.push({ name: d.name, ids: hit });
+        dutyIds = dutyIds.concat(hit);
+      }
+    });
+
+    function pick(field) {
+      return dailyGet(dateKey)[field].filter(function (id) {
+        return inScope[id] && !absent[id] && !taken[id];
+      });
+    }
+
+    var chuimin = pick('chuimin');
+    chuimin.forEach(function (id) { taken[id] = 1; });
+    var seonsik = pick('seonsik');
+    var yeondeung = pick('yeondeung');
+
+    var duty = dutyIds.length + chuimin.length;
+    var present = list.length - leave.length - dispatch.length - duty;
+    if (opts.seonsik) present -= seonsik.length;
+    if (opts.yeondeung) present -= yeondeung.length;
+
+    var detail = byType.map(function (t) { return t.name + ' ' + t.ids.length; });
+    if (chuimin.length) detail.push('근무취침 ' + chuimin.length);
+
+    return {
+      total: list.length,
+      leave: leave, dispatch: dispatch,
+      byType: byType, dutyIds: dutyIds, chuimin: chuimin,
+      seonsik: seonsik, yeondeung: yeondeung,
+      duty: duty, detail: detail.join(', '),
+      present: Math.max(0, present)
+    };
+  }
+
+  /* ==================== 보고 문구 ==================== */
+
+  function head(roomId) {
+    return roomId ? roomName(roomId) + ' ' : (S.unit ? S.unit + ' ' : '');
+  }
+
+  function rollText(label, hm, dateKey, roomId) {
+    var c = counts(dateKey, hm, roomId);
+    return head(roomId) + label + ' (' + hm + ') 총원 ' + c.total + '명, 휴가 ' + c.leave.length +
+      '명, 파견 ' + c.dispatch.length + '명, 근무 ' + c.duty + '명' +
+      (c.detail ? '(' + c.detail + ')' : '') + ', 현재원 ' + c.present + '명';
+  }
+
+  function mealText(meal, dateKey, roomId) {
+    var hm = servingTime(meal.id, dateKey);
+    var c = counts(dateKey, hm, roomId, { seonsik: true });
+    return head(roomId) + meal.label + ' (' + servingNo(meal.id, dateKey) + '배식 ' + hm + ') 총원 ' +
+      c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' + c.dispatch.length + '명, 근무 ' +
+      c.duty + '명, 선식 ' + c.seonsik.length + '명, 현재원 ' + c.present + '명';
+  }
+
+  function roomsReportText(dateKey) {
+    var hm = S.times.roomReport;
+    var lines = ['생활관 인원보고 (' + hm + ')'];
+    S.rooms.forEach(function (r) {
+      var c = counts(dateKey, hm, r.id);
+      lines.push(r.name + ' 총원 ' + c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' +
+        c.dispatch.length + '명, 근무 ' + c.duty + '명, 현재원 ' + c.present + '명');
+    });
+    var un = membersInRoom(null);
+    if (un.length) lines.push('생활관 미지정 ' + un.length + '명');
+    return lines.join('\n');
+  }
+
+  /** 다음 근무 투입자 기상 안내 */
+  function wakeLines(dateKey, hm, roomId) {
+    var from = atTime(dateKey, hm);
+    var lead = Math.max(0, +S.times.wakeLead || 0);
+    var out = [];
+    [dateKey, addDays(dateKey, 1)].forEach(function (dk) {
+      S.duties.forEach(function (d) {
+        d.slots.forEach(function (sl) {
+          var w = slotWindow(dk, sl);
+          if (!w) return;
+          var mins = (w[0] - from) / 60000;
+          if (mins <= 0 || mins > 480) return;
+          assignedIds(dk, d.id, sl.id).forEach(function (id) {
+            var m = member(id);
+            if (!m || leaveOn(id, dk)) return;
+            if (roomId && (m.roomId || null) !== roomId) return;
+            out.push({
+              at: w[0],
+              text: d.name + ' ' + sl.label + ' ' + m.name + ' ' +
+                minToHm(hmToMin(fmtHm(w[0])) - lead) + ' 기상 (' + fmtHm(w[0]) + ' 투입)'
+            });
+          });
+        });
+      });
+    });
+    out.sort(function (a, b) { return a.at - b.at; });
+    return out.map(function (x) { return x.text; });
+  }
+
+  function watchText(dateKey, roomId) {
+    var hm = S.times.nightWatch;
+    var c = counts(dateKey, hm, roomId, { yeondeung: true });
+    var day = dailyGet(dateKey);
+    var lines = [head(roomId) + '불침번 보고 (' + hm + ')'];
+    lines.push('총원 ' + c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' + c.dispatch.length +
+      '명, 근무 ' + c.duty + '명' + (c.detail ? '(' + c.detail + ')' : '') +
+      ', 연등 ' + c.yeondeung.length + '명, 현재원 ' + c.present + '명');
+    var temp = roomId ? day.temp[roomId] : null;
+    lines.push('생활관 온도 ' + (temp ? temp + '도' : '(미입력)'));
+    var notes = [].concat(wakeLines(dateKey, hm, roomId));
+    var free = roomId ? day.notes[roomId] : day.notes.all;
+    if (free) notes.push(free);
+    lines.push('특이사항: ' + (notes.length ? notes.join(' / ') : '없음'));
+    return lines.join('\n');
   }
 
   /* ==================== DOM 헬퍼 ==================== */
@@ -580,6 +913,334 @@
     }, rankBadge(m, true), m.name, lv ? h('span', { class: 'tag tag-leave' }, lv.type) : null);
   }
 
+  /* ==================== 화면: 한장 요약 ==================== */
+
+  function copyText(str, okMsg) {
+    var msg = okMsg || '복사했습니다';
+    var ta = h('textarea', { readonly: true, style: 'position:fixed;top:-1000px;left:0;opacity:0' });
+    ta.value = str;
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, str.length);
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(str).then(function () { toast(msg); }, function () {
+        toast(ok ? msg : '복사에 실패했습니다. 문구를 길게 눌러 복사하세요');
+      });
+    } else {
+      toast(ok ? msg : '복사에 실패했습니다. 문구를 길게 눌러 복사하세요');
+    }
+  }
+
+  function statRow(items) {
+    return h('div', { class: 'stats' }, items.map(function (it) {
+      return h('div', { class: 'stat' + (it.hi ? ' hi' : '') },
+        h('div', { class: 'stat-k' }, it.k),
+        h('div', { class: 'stat-v' }, it.v)
+      );
+    }));
+  }
+
+  function countStats(c, extra) {
+    var items = [
+      { k: '총원', v: c.total },
+      { k: '휴가', v: c.leave.length },
+      { k: '파견', v: c.dispatch.length },
+      { k: '근무', v: c.duty }
+    ];
+    if (extra === 'seonsik') items.push({ k: '선식', v: c.seonsik.length });
+    if (extra === 'yeondeung') items.push({ k: '연등', v: c.yeondeung.length });
+    items.push({ k: '현재원', v: c.present, hi: true });
+    return statRow(items);
+  }
+
+  function reportCard(opts) {
+    var card = h('div', { class: 'card' },
+      h('div', { class: 'card-head' },
+        h('div', { class: 'row', style: 'gap:7px' },
+          h('div', { class: 'card-title', style: 'color:var(--text);font-size:15px' }, opts.title),
+          opts.now ? h('span', { class: 'tag tag-now' }, '지금') : null
+        ),
+        h('div', { class: 'tiny faint mono' }, opts.when)
+      )
+    );
+    if (opts.stats) card.appendChild(opts.stats);
+    if (opts.formula) card.appendChild(h('div', { class: 'formula' }, opts.formula));
+    (opts.blocks || []).forEach(function (b) {
+      card.appendChild(h('div', { class: 'repbox' }, b.text));
+      card.appendChild(h('div', { class: 'btn-row', style: 'margin-top:8px' },
+        h('button', {
+          class: 'btn btn-sm', onclick: function () { copyText(b.text); }
+        }, '문구 복사'),
+        b.buttons || null
+      ));
+    });
+    return card;
+  }
+
+  function viewSummary() {
+    var dk = UI.date;
+    var wrap = h('div');
+    var now = new Date();
+    var isToday = dk === todayKey();
+
+    wrap.appendChild(h('div', { class: 'datebar' },
+      h('button', { class: 'btn btn-sm', onclick: function () { UI.date = addDays(dk, -1); render(); } }, '‹'),
+      h('div', { class: 'datebar-main' }, fmtDate(dk),
+        h('span', null, isToday ? '오늘' : (daysUntil(dk) > 0 ? 'D+' + daysUntil(dk) : daysUntil(dk) + '일'))),
+      h('button', { class: 'btn btn-sm', onclick: function () { UI.date = addDays(dk, 1); render(); } }, '›')
+    ));
+    if (!isToday) {
+      wrap.appendChild(h('button', {
+        class: 'btn btn-sm btn-ghost btn-block', style: 'margin-bottom:12px',
+        onclick: function () { UI.date = todayKey(); render(); }
+      }, '오늘로 이동'));
+    }
+
+    if (!S.members.length) {
+      wrap.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' },
+        '소대원을 등록하면 인원보고 문구가 자동으로 채워집니다.')));
+      return wrap;
+    }
+
+    /* 생활관 범위 선택 */
+    var chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
+    chips.appendChild(h('button', {
+      class: 'chip', 'aria-pressed': UI.scopeRoom ? 'false' : 'true',
+      onclick: function () { UI.scopeRoom = null; render(); }
+    }, '소대 전체'));
+    S.rooms.forEach(function (r) {
+      chips.appendChild(h('button', {
+        class: 'chip', 'aria-pressed': UI.scopeRoom === r.id ? 'true' : 'false',
+        onclick: function () { UI.scopeRoom = r.id; render(); }
+      }, r.name));
+    });
+    wrap.appendChild(chips);
+
+    var rid = UI.scopeRoom;
+    if (rid && !room(rid)) {
+      UI.scopeRoom = rid = null;
+    }
+
+    /* 지금 기준 현황 */
+    var nowHm = isToday ? fmtHm(now) : '12:00';
+    var cNow = counts(dk, nowHm, rid);
+    wrap.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'card-head' },
+        h('div', { class: 'card-title' }, (rid ? roomName(rid) : (S.unit || '소대 전체')) + ' 현황'),
+        h('div', { class: 'tiny faint mono' }, nowHm + ' 기준')
+      ),
+      countStats(cNow),
+      h('div', { class: 'formula' }, '현재원 = 총원 − 휴가 − 파견 − 근무')
+    ));
+
+    /* 보고 항목 */
+    var defs = [
+      { id: 'mroll', title: '아침점호', hm: S.times.morningRoll },
+      { id: 'meal_b', title: MEALS[0].label, hm: servingTime('b', dk), meal: MEALS[0] },
+      { id: 'meal_l', title: MEALS[1].label, hm: servingTime('l', dk), meal: MEALS[1] },
+      { id: 'meal_d', title: MEALS[2].label, hm: servingTime('d', dk), meal: MEALS[2] },
+      { id: 'rooms', title: '생활관 인원보고', hm: S.times.roomReport },
+      { id: 'eroll', title: '저녁점호집합', hm: S.times.eveningRoll },
+      { id: 'watch', title: '불침번 보고', hm: S.times.nightWatch }
+    ];
+
+    /* 지금 시각에 가장 가까운 항목 하나에 '지금' 배지 */
+    var nowId = null;
+    if (isToday) {
+      var best = 1e9;
+      defs.forEach(function (d) {
+        var diff = Math.abs(hmToMin(nowHm) - hmToMin(d.hm));
+        if (diff < best) { best = diff; nowId = d.id; }
+      });
+    }
+
+    defs.forEach(function (d) {
+      if (d.meal) {
+        var c = counts(dk, d.hm, rid, { seonsik: true });
+        wrap.appendChild(reportCard({
+          title: d.title, when: servingNo(d.meal.id, dk) + '배식 · ' + d.hm, now: nowId === d.id,
+          stats: countStats(c, 'seonsik'),
+          formula: '현재원 = 총원 − 휴가 − 파견 − 근무 − 선식',
+          blocks: [{
+            text: mealText(d.meal, dk, rid),
+            buttons: h('button', {
+              class: 'btn btn-sm', onclick: function () {
+                pickDailyMembers(dk, 'seonsik', '선식 인원', rid);
+              }
+            }, '선식 지정')
+          }]
+        }));
+        return;
+      }
+
+      if (d.id === 'rooms') {
+        wrap.appendChild(reportCard({
+          title: d.title, when: d.hm, now: nowId === d.id,
+          blocks: [{
+            text: S.rooms.length ? roomsReportText(dk)
+              : '생활관을 등록하면 생활관별 인원이 여기 나옵니다. (설정 → 생활관)'
+          }]
+        }));
+        return;
+      }
+
+      if (d.id === 'watch') {
+        var targets = rid ? [rid] : (S.rooms.length ? S.rooms.map(function (r) { return r.id; }) : [null]);
+        var blocks = targets.map(function (t) {
+          var day = dailyGet(dk);
+          return {
+            text: watchText(dk, t),
+            buttons: h('span', { class: 'btn-row', style: 'display:flex;gap:8px;flex:2' },
+              h('button', {
+                class: 'btn btn-sm', onclick: function () {
+                  pickDailyMembers(dk, 'yeondeung', '연등 인원' + (t ? ' · ' + roomName(t) : ''), t);
+                }
+              }, '연등 지정'),
+              h('button', {
+                class: 'btn btn-sm', onclick: function () { editWatchExtra(dk, t); }
+              }, '온도 · 메모')
+            )
+          };
+        });
+        wrap.appendChild(reportCard({
+          title: d.title + (rid ? '' : (S.rooms.length ? ' · 생활관별' : '')),
+          when: d.hm, now: nowId === d.id,
+          stats: targets.length === 1
+            ? countStats(counts(dk, d.hm, targets[0], { yeondeung: true }), 'yeondeung')
+            : null,
+          formula: '현재원 = 총원 − 휴가 − 파견 − 근무 − 연등',
+          blocks: blocks
+        }));
+        return;
+      }
+
+      /* 점호 */
+      var cr = counts(dk, d.hm, rid);
+      wrap.appendChild(reportCard({
+        title: d.title, when: d.hm, now: nowId === d.id,
+        stats: countStats(cr),
+        formula: '현재원 = 총원 − 휴가 − 파견 − 근무',
+        blocks: [{
+          text: rollText(d.title, d.hm, dk, rid),
+          buttons: h('button', {
+            class: 'btn btn-sm', onclick: function () {
+              pickDailyMembers(dk, 'chuimin', '근무취침 인원', rid);
+            }
+          }, '근무취침 지정')
+        }]
+      }));
+    });
+
+    wrap.appendChild(h('button', {
+      class: 'btn btn-ghost btn-block', onclick: function () { go('settings'); }
+    }, '점호 · 배식 시각 수정'));
+
+    return wrap;
+  }
+
+  /** 선식 · 근무취침 · 연등 인원 선택 */
+  function pickDailyMembers(dateKey, field, title, roomId) {
+    var cur = dailyGet(dateKey)[field];
+    var sel = cur.slice();
+    var list = h('div', { class: 'mlist' });
+    var scope = scopeList(roomId);
+
+    if (!scope.length) {
+      toast('이 범위에 소대원이 없습니다');
+      return;
+    }
+
+    scope.forEach(function (m) {
+      var lv = leaveOn(m.id, dateKey);
+      var row = h('button', {
+        class: 'picker-row', 'aria-pressed': sel.indexOf(m.id) >= 0 ? 'true' : 'false'
+      },
+        h('span', { class: 'picker-check' }, '✓'),
+        rankBadge(m, true),
+        h('span', { class: 'grow' },
+          h('span', { class: 'mrow-name' }, m.name),
+          h('span', { class: 'mrow-meta' }, [roomName(m.roomId || null),
+            m.saro ? m.saro + '사로' : null].filter(Boolean).join(' · '))
+        ),
+        lv ? h('span', { class: 'tag tag-leave' }, lv.type) : null
+      );
+      row.addEventListener('click', function () {
+        var i = sel.indexOf(m.id);
+        if (i >= 0) sel.splice(i, 1);
+        else sel.push(m.id);
+        row.setAttribute('aria-pressed', i >= 0 ? 'false' : 'true');
+        cnt.textContent = '선택 ' + sel.length + '명';
+      });
+      list.appendChild(row);
+    });
+
+    var cnt = h('div', { class: 'tiny faint', style: 'padding:10px 2px 0' }, '선택 ' + sel.length + '명');
+    var close = sheet(title + ' · ' + fmtDate(dateKey), h('div', null, list, cnt), [
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '취소'),
+      h('button', {
+        class: 'btn btn-primary', onclick: function () {
+          /* 다른 생활관 선택은 그대로 두고 이 범위만 교체 */
+          var keep = cur.filter(function (id) {
+            var m = member(id);
+            return m && roomId && (m.roomId || null) !== roomId;
+          });
+          var d = dailyEdit(dateKey);
+          d[field] = keep.concat(sel);
+          save();
+          close();
+          render();
+          toast('저장했습니다');
+        }
+      }, '저장')
+    ]);
+  }
+
+  /** 생활관 온도 · 특이사항 */
+  function editWatchExtra(dateKey, roomId) {
+    var day = dailyGet(dateKey);
+    var key = roomId || 'all';
+    var tempIn = h('input', {
+      class: 'input', type: 'number', min: '0', max: '45', step: '0.5',
+      value: (roomId ? day.temp[roomId] : '') || '', placeholder: '예: 24'
+    });
+    var noteIn = h('textarea', { class: 'input', placeholder: '자동 기상 안내 외에 덧붙일 내용' });
+    noteIn.value = day.notes[key] || '';
+
+    var auto = wakeLines(dateKey, S.times.nightWatch, roomId);
+    var body = h('div', null,
+      roomId ? field('생활관 온도 (도)', tempIn)
+        : h('div', { class: 'warnbox' }, '온도는 생활관을 선택해야 입력할 수 있습니다.'),
+      field('특이사항 (직접 입력)', noteIn),
+      h('div', { class: 'section-title' }, '자동으로 붙는 기상 안내'),
+      auto.length
+        ? h('div', { class: 'repbox' }, auto.join('\n'))
+        : h('div', { class: 'small faint' }, '앞으로 8시간 내 투입되는 근무자가 없습니다.')
+    );
+
+    var close = sheet('불침번 보고 입력' + (roomId ? ' · ' + roomName(roomId) : ''), body, [
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '취소'),
+      h('button', {
+        class: 'btn btn-primary', onclick: function () {
+          var d = dailyEdit(dateKey);
+          if (roomId) {
+            if (tempIn.value) d.temp[roomId] = tempIn.value;
+            else delete d.temp[roomId];
+          }
+          var v = noteIn.value.trim();
+          if (v) d.notes[key] = v;
+          else delete d.notes[key];
+          save();
+          close();
+          render();
+          toast('저장했습니다');
+        }
+      }, '저장')
+    ]);
+  }
+
   /* ==================== 화면: 근무 ==================== */
 
   function viewDuty() {
@@ -721,6 +1382,168 @@
 
   function viewRoster() {
     var wrap = h('div');
+    wrap.appendChild(h('div', { class: 'seg' },
+      segBtn('명단', 'list'),
+      segBtn('사로표', 'saro')
+    ));
+    wrap.appendChild(UI.rosterMode === 'saro' ? viewSaro() : viewRosterList());
+    return wrap;
+  }
+
+  function segBtn(label, mode) {
+    return h('button', {
+      class: 'seg-btn', 'aria-pressed': UI.rosterMode === mode ? 'true' : 'false',
+      onclick: function () { UI.rosterMode = mode; render(); }
+    }, label);
+  }
+
+  /* ---------- 생활관 사로표 (2열 × 6행) ---------- */
+
+  function viewSaro() {
+    var wrap = h('div');
+    var dk = todayKey();
+    var now = new Date();
+
+    if (!S.rooms.length) {
+      wrap.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'empty' }, '생활관을 먼저 등록하세요.', h('br'), '한 생활관당 ' + SARO_MAX + '사로까지 배정할 수 있습니다.'),
+        h('button', {
+          class: 'btn btn-primary btn-block', onclick: function () { editRoom(null); }
+        }, '＋ 생활관 추가')
+      ));
+      return wrap;
+    }
+
+    S.rooms.forEach(function (r) {
+      var mine = membersInRoom(r.id);
+      var card = h('div', { class: 'card' },
+        h('div', { class: 'card-head' },
+          h('div', { class: 'card-title', style: 'color:var(--text);font-size:15px' }, r.name),
+          h('div', { class: 'row', style: 'gap:6px' },
+            h('span', { class: 'tiny faint' }, mine.length + '명'),
+            h('button', { class: 'btn btn-sm btn-ghost', onclick: function () { editRoom(r.id); } }, '수정')
+          )
+        )
+      );
+
+      var grid = h('div', { class: 'saro-grid' });
+      for (var n = 1; n <= SARO_CELLS; n++) {
+        (function (n) {
+          if (n > SARO_MAX) {
+            grid.appendChild(h('div', { class: 'saro-cell is-void' }, h('span', { class: 'saro-no' }, '—')));
+            return;
+          }
+          var m = saroOccupant(r.id, n);
+          var st = '';
+          var label = '';
+          if (m) {
+            var lv = leaveOn(m.id, dk);
+            var ds = dutiesOf(m.id, dk);
+            var live = ds.some(function (x) { return isLive(dk, x.slot, now); });
+            st = live ? ' st-now' : (lv ? ' st-leave' : (ds.length ? ' st-duty' : ''));
+            label = lv ? lv.type : (live ? '근무 중' : (ds.length ? ds[0].duty.name : ''));
+          }
+          grid.appendChild(h('button', {
+            class: 'saro-cell' + st + (m ? '' : ' is-empty'),
+            onclick: function () { pickSaroOccupant(r.id, n); }
+          },
+            h('span', { class: 'saro-no' }, n),
+            m ? h('span', { class: 'saro-who' }, rankBadge(m, true), h('span', { class: 'ellipsis' }, m.name))
+              : h('span', { class: 'saro-who faint' }, '빈 사로'),
+            h('span', { class: 'saro-st' }, label)
+          ));
+        })(n);
+      }
+      card.appendChild(grid);
+      card.appendChild(h('div', { class: 'tiny faint', style: 'margin-top:8px' },
+        '왼쪽 1~' + SARO_ROWS + '사로, 오른쪽 ' + (SARO_ROWS + 1) + '~' + SARO_MAX + '사로'));
+
+      var un = mine.filter(function (m) { return !m.saro; });
+      if (un.length) {
+        card.appendChild(h('div', { class: 'section-title' }, '사로 미지정 ' + un.length + '명'));
+        card.appendChild(h('div', { class: 'slot-people' }, un.map(function (m) {
+          return h('button', {
+            class: 'person', onclick: function () { editMember(m.id); }
+          }, rankBadge(m, true), m.name);
+        })));
+      }
+      wrap.appendChild(card);
+    });
+
+    var none = membersInRoom(null);
+    if (none.length) {
+      wrap.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'card-title' }, '생활관 미지정 ' + none.length + '명'),
+        h('div', { class: 'mlist' }, none.map(function (m) {
+          return h('button', { class: 'mrow', onclick: function () { editMember(m.id); } },
+            rankBadge(m),
+            h('div', { class: 'grow' },
+              h('div', { class: 'mrow-name ellipsis' }, m.name),
+              h('div', { class: 'mrow-meta' }, rank(m.rankId).name)
+            ),
+            h('span', { class: 'tiny faint' }, '배정 ›')
+          );
+        }))
+      ));
+    }
+
+    wrap.appendChild(h('button', {
+      class: 'btn btn-ghost btn-block', onclick: function () { editRoom(null); }
+    }, '＋ 생활관 추가'));
+
+    return wrap;
+  }
+
+  function pickSaroOccupant(roomId, n) {
+    var cur = saroOccupant(roomId, n);
+    var list = h('div', { class: 'mlist' });
+    var here = membersInRoom(roomId), other = roster().filter(function (m) {
+      return (m.roomId || null) !== roomId;
+    });
+
+    function row(m) {
+      return h('button', {
+        class: 'picker-row', 'aria-pressed': cur && cur.id === m.id ? 'true' : 'false',
+        onclick: function () {
+          setSaro(m.id, roomId, n);
+          close();
+          render();
+          toast(m.name + ' → ' + n + '사로');
+        }
+      },
+        h('span', { class: 'picker-check' }, '✓'),
+        rankBadge(m, true),
+        h('span', { class: 'grow' },
+          h('span', { class: 'mrow-name' }, m.name),
+          h('span', { class: 'mrow-meta' }, [rank(m.rankId).name,
+            m.saro ? m.saro + '사로' : null,
+            (m.roomId || null) !== roomId ? roomName(m.roomId || null) : null].filter(Boolean).join(' · '))
+        )
+      );
+    }
+
+    here.forEach(function (m) { list.appendChild(row(m)); });
+    if (other.length) {
+      list.appendChild(h('div', { class: 'section-title' }, '다른 생활관 · 미지정'));
+      other.forEach(function (m) { list.appendChild(row(m)); });
+    }
+
+    var close = sheet(roomName(roomId) + ' ' + n + '사로', list, [
+      cur ? h('button', {
+        class: 'btn btn-danger', onclick: function () {
+          cur.saro = null;
+          save();
+          close();
+          render();
+          toast('비웠습니다');
+        }
+      }, '비우기') : null,
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '닫기')
+    ].filter(Boolean));
+  }
+
+  function viewRosterList() {
+    var wrap = h('div');
     var all = roster();
     var dk = todayKey();
     var now = new Date();
@@ -764,7 +1587,9 @@
             h('div', { class: 'mrow-name ellipsis' }, m.name,
               m.id === S.meId ? h('span', { class: 'tag tag-me', style: 'margin-left:6px' }, '나') : null),
             h('div', { class: 'mrow-meta ellipsis' },
-              [rank(m.rankId).name, m.role, m.enlist ? '입대 ' + m.enlist : null]
+              [rank(m.rankId).name, m.role,
+                m.roomId ? roomName(m.roomId) + (m.saro ? ' ' + m.saro + '사로' : '') : null,
+                m.enlist ? '입대 ' + m.enlist : null]
                 .filter(Boolean).join(' · '))
           ),
           liveNow ? h('span', { class: 'tag tag-now' }, '근무 중')
@@ -795,6 +1620,10 @@
       m.discharge ? h('span', { class: 'dday' }, ddayText(m)) : null
     ));
 
+    body.appendChild(h('div', { class: 'kv' },
+      h('span', { class: 'k' }, '생활관 · 사로'),
+      h('span', null, roomName(m.roomId || null) + (m.saro ? ' ' + m.saro + '사로' : ''))
+    ));
     body.appendChild(h('div', { class: 'kv' }, h('span', { class: 'k' }, '입대일'), h('span', null, m.enlist || '-')));
     body.appendChild(h('div', { class: 'kv' }, h('span', { class: 'k' }, '전역일'), h('span', null, m.discharge || '-')));
     body.appendChild(h('div', { class: 'kv' },
@@ -860,7 +1689,10 @@
   function editMember(id) {
     var m = id ? member(id) : null;
     var draft = m ? JSON.parse(JSON.stringify(m))
-      : { id: uid('m'), name: '', rankId: 'pvt', role: '', enlist: '', discharge: '', note: '' };
+      : {
+        id: uid('m'), name: '', rankId: 'pvt', role: '',
+        roomId: null, saro: null, enlist: '', discharge: '', note: ''
+      };
 
     var nameIn = h('input', { class: 'input', value: draft.name, placeholder: '예: 김철수', maxlength: '20' });
     var roleIn = h('input', { class: 'input', value: draft.role || '', placeholder: '예: 분대장, 소대장 (선택)', maxlength: '20' });
@@ -884,10 +1716,29 @@
       chips.appendChild(c);
     });
 
+    var roomSel = h('select', { class: 'input' });
+    roomSel.appendChild(h('option', { value: '' }, '생활관 미지정'));
+    S.rooms.forEach(function (r) {
+      var op = h('option', { value: r.id }, r.name);
+      if ((draft.roomId || '') === r.id) op.selected = true;
+      roomSel.appendChild(op);
+    });
+
+    var saroSel = h('select', { class: 'input' });
+    saroSel.appendChild(h('option', { value: '' }, '사로 미지정'));
+    for (var sn = 1; sn <= SARO_MAX; sn++) {
+      var sop = h('option', { value: sn }, sn + '사로');
+      if (+draft.saro === sn) sop.selected = true;
+      saroSel.appendChild(sop);
+    }
+
     var body = h('div', null,
       field('이름', nameIn),
       field('계급', chips),
       field('직책', roleIn),
+      field('생활관', S.rooms.length ? roomSel
+        : h('div', { class: 'small faint' }, '설정 → 생활관에서 먼저 등록하세요')),
+      field('사로 (1~' + SARO_MAX + ')', saroSel),
       field('입대일 (선임 순서 정렬에 사용, 선택)', enlistIn),
       field('전역일 (D-day 표시, 선택)', dischargeIn),
       field('메모', noteIn),
@@ -935,6 +1786,8 @@
             S.members.push(draft);
           }
           save();
+          /* 사로는 중복 배정을 정리해야 하므로 setSaro 로 반영 */
+          setSaro(draft.id, roomSel.value || null, +saroSel.value || null);
           close();
           render();
           toast(m ? '수정했습니다' : name + ' 님을 추가했습니다');
@@ -1173,6 +2026,121 @@
       field('소대 이름', unitIn)
     ));
 
+    /* 생활관 */
+    var roomCard = h('div', { class: 'card' },
+      h('div', { class: 'card-head' },
+        h('div', { class: 'card-title' }, '생활관'),
+        h('button', { class: 'btn btn-sm btn-ghost', onclick: function () { editRoom(null); } }, '＋ 추가')
+      )
+    );
+    if (!S.rooms.length) {
+      roomCard.appendChild(h('div', { class: 'small faint' },
+        '생활관을 등록하면 사로표와 생활관별 인원보고를 쓸 수 있습니다.'));
+    } else {
+      var rl = h('div', { class: 'mlist' });
+      S.rooms.forEach(function (r) {
+        var mine = membersInRoom(r.id);
+        rl.appendChild(h('button', {
+          class: 'mrow', onclick: function () { editRoom(r.id); }
+        },
+          h('div', { class: 'grow' },
+            h('div', { class: 'mrow-name' }, r.name),
+            h('div', { class: 'mrow-meta' }, mine.length + '명 · 사로 배정 ' +
+              mine.filter(function (m) { return m.saro; }).length + '명')
+          ),
+          h('span', { class: 'tiny faint' }, '›')
+        ));
+      });
+      roomCard.appendChild(rl);
+    }
+    wrap.appendChild(roomCard);
+
+    /* 점호 · 보고 시각 */
+    function timeField(label, key) {
+      var inp = h('input', { class: 'input', type: 'time', value: S.times[key] || '' });
+      inp.addEventListener('change', function () {
+        S.times[key] = inp.value || S.times[key];
+        save();
+        render();
+      });
+      return field(label, inp);
+    }
+    var leadIn = h('input', { class: 'input', type: 'number', min: '0', max: '60', value: S.times.wakeLead });
+    leadIn.addEventListener('change', function () {
+      S.times.wakeLead = Math.max(0, +leadIn.value || 0);
+      save();
+      render();
+    });
+    wrap.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'card-title' }, '점호 · 보고 시각'),
+      timeField('아침점호', 'morningRoll'),
+      timeField('생활관 인원보고', 'roomReport'),
+      timeField('저녁점호집합', 'eveningRoll'),
+      timeField('불침번 보고 기준', 'nightWatch'),
+      field('근무 투입 몇 분 전에 기상시킬지 (분)', leadIn)
+    ));
+
+    /* 배식 */
+    var svCard = h('div', { class: 'card' }, h('div', { class: 'card-title' }, '배식 순번'));
+    MEALS.forEach(function (meal) {
+      var baseIn = h('input', { class: 'input', type: 'time', value: S.serving.base[meal.id] });
+      var noSel = h('select', { class: 'input' });
+      for (var i = 1; i <= (+S.serving.count || 4); i++) {
+        var op = h('option', { value: i }, i + '배식');
+        if (+S.serving.order[meal.id] === i) op.selected = true;
+        noSel.appendChild(op);
+      }
+      baseIn.addEventListener('change', function () {
+        S.serving.base[meal.id] = baseIn.value || S.serving.base[meal.id];
+        save();
+        render();
+      });
+      noSel.addEventListener('change', function () {
+        S.serving.order[meal.id] = +noSel.value;
+        S.serving.anchor = todayKey();
+        save();
+        render();
+      });
+      svCard.appendChild(h('div', { class: 'row', style: 'gap:8px;align-items:flex-end;margin-bottom:10px' },
+        h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, meal.name + ' 1배식 시각'), baseIn),
+        h('div', { style: 'width:112px' }, h('div', { class: 'tiny faint' }, '이번 주 순번'), noSel)
+      ));
+      svCard.appendChild(h('div', { class: 'tiny faint', style: 'margin:-4px 0 12px' },
+        '오늘 ' + meal.name + ' → ' + servingNo(meal.id, UI.date) + '배식 ' + servingTime(meal.id, UI.date)));
+    });
+
+    var stepIn = h('input', { class: 'input', type: 'number', min: '1', max: '60', value: S.serving.step });
+    var cntIn = h('input', { class: 'input', type: 'number', min: '1', max: '12', value: S.serving.count });
+    stepIn.addEventListener('change', function () {
+      S.serving.step = Math.max(1, +stepIn.value || 10);
+      save();
+      render();
+    });
+    cntIn.addEventListener('change', function () {
+      S.serving.count = Math.max(1, +cntIn.value || 4);
+      save();
+      render();
+    });
+    svCard.appendChild(h('div', { class: 'row', style: 'gap:8px;align-items:flex-end' },
+      h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '배식 간격(분)'), stepIn),
+      h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '총 배식 수'), cntIn)
+    ));
+    svCard.appendChild(h('button', {
+      class: 'chip', style: 'margin-top:12px',
+      'aria-pressed': S.serving.autoRotate ? 'true' : 'false',
+      onclick: function () {
+        S.serving.autoRotate = !S.serving.autoRotate;
+        if (S.serving.autoRotate) S.serving.anchor = todayKey();
+        save();
+        render();
+      }
+    }, '주마다 순번 자동 회전'));
+    svCard.appendChild(h('div', { class: 'tiny faint', style: 'margin-top:8px' },
+      S.serving.autoRotate
+        ? '이번 주(' + weekStartKey(todayKey()) + ' 시작) 순번을 기준으로 매주 한 칸씩 밀립니다.'
+        : '순번을 고정합니다. 주마다 바뀌면 직접 바꿔주세요.'));
+    wrap.appendChild(svCard);
+
     /* 근무 종류 */
     var dutyCard = h('div', { class: 'card' },
       h('div', { class: 'card-head' },
@@ -1187,9 +2155,10 @@
       },
         h('div', { class: 'grow' },
           h('div', { class: 'mrow-name' }, d.name),
-          h('div', { class: 'mrow-meta ellipsis' }, d.slots.map(function (s) {
-            return s.label + (slotTimeText(s) ? ' ' + slotTimeText(s) : '');
-          }).join(' / ') || '시간대 없음')
+          h('div', { class: 'mrow-meta ellipsis' },
+            (d.report === false ? '[보고 제외] ' : '') + (d.slots.map(function (s) {
+              return s.label + (slotTimeText(s) ? ' ' + slotTimeText(s) : '');
+            }).join(' / ') || '시간대 없음'))
         ),
         h('span', { class: 'tiny faint' }, '›')
       ));
@@ -1234,10 +2203,65 @@
     return wrap;
   }
 
+  function editRoom(id) {
+    var r = id ? room(id) : null;
+    var nameIn = h('input', {
+      class: 'input', maxlength: '16',
+      value: r ? r.name : (S.rooms.length + 1) + '생활관',
+      placeholder: '예: 3생활관'
+    });
+
+    var body = h('div', null,
+      field('생활관 이름', nameIn),
+      h('p', { class: 'small faint', style: 'margin:0 0 12px' },
+        '사로표는 2열 × ' + SARO_ROWS + '행으로 ' + SARO_MAX + '사로까지 표시됩니다.'),
+      r ? h('button', {
+        class: 'btn btn-danger btn-block', onclick: function () {
+          close();
+          confirmSheet('생활관 삭제', r.name + ' 을(를) 삭제합니다. 소속된 소대원은 생활관·사로 미지정으로 바뀌고, 명단에서 지워지지는 않습니다.', function () {
+            membersInRoom(r.id).forEach(function (m) {
+              m.roomId = null;
+              m.saro = null;
+            });
+            S.rooms = S.rooms.filter(function (x) { return x.id !== r.id; });
+            Object.keys(S.daily).forEach(function (dk) {
+              var d = S.daily[dk];
+              if (d.temp) delete d.temp[r.id];
+              if (d.notes) delete d.notes[r.id];
+            });
+            if (UI.scopeRoom === r.id) UI.scopeRoom = null;
+            save();
+            render();
+            toast('삭제했습니다');
+          });
+        }
+      }, '이 생활관 삭제') : null
+    );
+
+    var close = sheet(r ? '생활관 수정' : '생활관 추가', body, [
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '취소'),
+      h('button', {
+        class: 'btn btn-primary', onclick: function () {
+          var name = nameIn.value.trim();
+          if (!name) {
+            toast('이름을 입력하세요');
+            return;
+          }
+          if (r) r.name = name;
+          else S.rooms.push({ id: uid('r'), name: name });
+          save();
+          close();
+          render();
+          toast('저장했습니다');
+        }
+      }, '저장')
+    ]);
+  }
+
   function editDuty(id) {
     var d = id ? duty(id) : null;
     var draft = d ? JSON.parse(JSON.stringify(d))
-      : { id: uid('d'), name: '', kind: 'slots', slots: [{ id: uid('s'), label: '1번초', start: '22:00', end: '23:30', need: 2 }] };
+      : { id: uid('d'), name: '', kind: 'slots', report: true, slots: [{ id: uid('s'), label: '1번초', start: '22:00', end: '23:30', need: 2 }] };
 
     var nameIn = h('input', { class: 'input', value: draft.name, placeholder: '예: 불침번', maxlength: '16' });
     var slotWrap = h('div');
@@ -1289,9 +2313,18 @@
       kindChips.appendChild(c);
     });
 
+    var reportChip = h('button', {
+      class: 'chip', 'aria-pressed': draft.report === false ? 'false' : 'true',
+      onclick: function () {
+        draft.report = draft.report === false;
+        reportChip.setAttribute('aria-pressed', draft.report ? 'true' : 'false');
+      }
+    }, '인원보고에서 근무로 집계');
+
     var body = h('div', null,
       field('근무 이름', nameIn),
       field('형태', kindChips),
+      field('인원보고', reportChip),
       h('div', { class: 'section-title' }, '시간대 · 필요 인원'),
       slotWrap,
       h('button', {
@@ -1414,6 +2447,7 @@
 
   var TABS = [
     { id: 'today', label: '오늘', ico: '🎯', title: '오늘', view: viewToday },
+    { id: 'summary', label: '요약', ico: '📋', title: '한장 요약', view: viewSummary },
     { id: 'duty', label: '근무', ico: '🕒', title: '근무 편성', view: viewDuty },
     { id: 'roster', label: '소대원', ico: '👥', title: '소대원', view: viewRoster },
     { id: 'cal', label: '일정', ico: '📅', title: '일정', view: viewCalendar },
@@ -1436,8 +2470,10 @@
     var sub = '';
     if (tab.id === 'today') {
       sub = fmtDateLong(todayKey()) + (S.unit ? ' · ' + S.unit : '');
+    } else if (tab.id === 'summary') {
+      sub = '점호 · 식사 · 불침번 보고 문구';
     } else if (tab.id === 'roster') {
-      sub = '계급 · 선임 순으로 정렬됩니다';
+      sub = UI.rosterMode === 'saro' ? '생활관 사로표 · 칸을 눌러 배정' : '계급 · 선임 순으로 정렬됩니다';
     } else if (tab.id === 'duty') {
       sub = '날짜를 넘겨 근무를 편성하세요';
     } else if (tab.id === 'cal') {

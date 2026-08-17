@@ -538,6 +538,144 @@ textarea.input { min-height: 76px; resize: vertical; }
   animation: rise 0.16s ease-out;
 }
 
+/* ---------- segmented control ---------- */
+
+.seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 4px 0 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+}
+
+.seg-btn {
+  flex: 1;
+  min-height: 38px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.seg-btn[aria-pressed="true"] { background: var(--bg-elev-2); color: var(--text); }
+
+/* ---------- 사로표 ---------- */
+
+.saro-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(6, auto);
+  grid-auto-flow: column;
+  gap: 7px;
+  column-gap: 20px;
+  position: relative;
+}
+
+.saro-grid::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+  background: repeating-linear-gradient(180deg, var(--line) 0 5px, transparent 5px 11px);
+}
+
+.saro-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 58px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  background: var(--bg-elev-2);
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+
+.saro-cell.is-empty { border-style: dashed; background: transparent; }
+.saro-cell.is-void { border: 0; background: none; opacity: 0.35; }
+
+.saro-no {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.saro-who {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.saro-st { font-size: 10.5px; color: var(--text-faint); }
+
+.saro-cell::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: transparent;
+}
+
+.saro-cell.st-leave::after { background: var(--warn); }
+.saro-cell.st-duty::after { background: var(--info); }
+.saro-cell.st-now::after { background: var(--accent); }
+
+/* ---------- 인원 숫자 ---------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 6px;
+}
+
+.stat {
+  padding: 7px 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--bg-elev-2);
+  text-align: center;
+}
+
+.stat-k { font-size: 10.5px; color: var(--text-faint); font-weight: 700; }
+.stat-v { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.stat.hi { border-color: var(--accent-dim); background: rgba(78, 166, 122, 0.12); }
+.stat.hi .stat-v { color: #7fd0a3; }
+
+.formula {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 7px;
+  text-align: right;
+}
+
+.repbox {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  background: #0f171d;
+  font-size: 13.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ---------- misc ---------- */
 
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 14.5px; }

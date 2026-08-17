@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1317">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="이등병 생존 가이드">
+<meta name="description" content="소대원 계급·근무·휴가 일정을 한눈에 보는 오프라인 앱">
+<title>이등병 생존 가이드</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="topbar">
+    <div class="topbar-title" id="topbar-title">오늘</div>
+    <div class="topbar-sub" id="topbar-sub"></div>
+  </header>
+  <main id="view" class="view"></main>
+  <nav class="tabbar" id="tabbar"></nav>
+</div>
+<div id="sheet-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

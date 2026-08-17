@@ -14,6 +14,7 @@
   --warn: #d9a13a;
   --danger: #d9614f;
   --info: #4d8fc7;
+  --disp: #9b8ad4;
   --radius: 14px;
   --tap: 46px;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -289,6 +290,11 @@ textarea.input { min-height: 76px; resize: vertical; }
 .tag-now { background: rgba(78, 166, 122, 0.18); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.35); }
 .tag-me { background: rgba(78, 166, 122, 0.16); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.32); }
 
+/* 상태 5종: 일과 · 휴식 · 근무 · 휴가 · 파견 */
+.tag-work { background: rgba(78, 166, 122, 0.14); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.3); }
+.tag-rest { background: var(--bg-elev-2); color: var(--text-dim); border-color: var(--line-soft); }
+.tag-disp { background: rgba(155, 138, 212, 0.16); color: #bda9ea; border-color: rgba(155, 138, 212, 0.34); }
+
 /* ---------- board (한눈에) ---------- */
 
 .board {
@@ -328,6 +334,9 @@ textarea.input { min-height: 76px; resize: vertical; }
 .board-cell.st-leave::after { background: var(--warn); }
 .board-cell.st-duty::after { background: var(--info); }
 .board-cell.st-now::after { background: var(--accent); }
+.board-cell.st-work::after { background: var(--accent); }
+.board-cell.st-rest::after { background: var(--line); }
+.board-cell.st-disp::after { background: var(--disp); }
 
 /* ---------- duty slots ---------- */
 
@@ -633,6 +642,9 @@ textarea.input { min-height: 76px; resize: vertical; }
 .saro-cell.st-leave::after { background: var(--warn); }
 .saro-cell.st-duty::after { background: var(--info); }
 .saro-cell.st-now::after { background: var(--accent); }
+.saro-cell.st-work::after { background: var(--accent); }
+.saro-cell.st-rest::after { background: var(--line); }
+.saro-cell.st-disp::after { background: var(--disp); }
 
 /* ---------- 인원 숫자 ---------- */
 
@@ -687,6 +699,11 @@ textarea.input { min-height: 76px; resize: vertical; }
 
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-faint); margin-top: 10px; }
 .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+.legend i.lg.st-work { background: var(--accent); }
+.legend i.lg.st-rest { background: var(--text-faint); }
+.legend i.lg.st-duty { background: var(--info); }
+.legend i.lg.st-leave { background: var(--warn); }
+.legend i.lg.st-disp { background: var(--disp); }
 
 .hr { height: 1px; background: var(--line-soft); margin: 16px 0; border: 0; }
 

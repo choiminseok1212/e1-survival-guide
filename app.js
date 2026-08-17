@@ -474,7 +474,7 @@
   /* ==================== 그날의 수동 입력 ==================== */
 
   function dailyBlank() {
-    return { seonsik: [], chuimin: [], yeondeung: [], temp: {}, notes: {} };
+    return { seonsik: [], chuimin: [], yeondeung: [], temp: {}, notes: {}, status: '' };
   }
 
   /** 읽기 전용 (저장소를 건드리지 않음) */
@@ -491,6 +491,7 @@
     if (!Array.isArray(d.yeondeung)) d.yeondeung = [];
     if (!d.temp) d.temp = {};
     if (!d.notes) d.notes = {};
+    if (typeof d.status !== 'string') d.status = '';
     return d;
   }
 
@@ -736,8 +737,10 @@
     var wrap = h('div');
     var all = roster();
 
+    wrap.appendChild(statusStrip());
+
     if (!all.length) {
-      return h('div', null,
+      wrap.appendChild(h('div', null,
         h('div', { class: 'card' },
           h('div', { class: 'empty' },
             h('div', { style: 'font-size:34px;margin-bottom:6px' }, '🫡'),
@@ -754,7 +757,8 @@
             '모든 데이터는 이 폰 안에만 저장됩니다. 인터넷이 끊겨도, 비행기 모드에서도 그대로 동작합니다. ' +
             '설정 탭에서 백업 문자열을 복사해 두면 폰을 바꿔도 옮길 수 있습니다.')
         )
-      );
+      ));
+      return wrap;
     }
 
     /* 지금 근무 중 */
@@ -902,6 +906,70 @@
     ));
 
     return wrap;
+  }
+
+  /* ---------- D-DAY / D-1 / D-2 상태 메모 ----------
+   * 날짜를 키로 저장하므로 하루가 지나면 저절로 한 칸씩 당겨진다.
+   * (앱은 1분마다, 그리고 화면에 돌아올 때마다 다시 그린다)
+   */
+  var STATUS_SLOTS = [
+    { off: 0, tag: 'D-DAY', name: '오늘' },
+    { off: 1, tag: 'D-1', name: '내일' },
+    { off: 2, tag: 'D-2', name: '모레' }
+  ];
+
+  function statusStrip() {
+    var card = h('div', { class: 'card' },
+      h('div', { class: 'card-head' },
+        h('div', { class: 'card-title' }, '상태 · 특이사항'),
+        h('div', { class: 'tiny faint' }, '3일치 미리 쓰기')
+      )
+    );
+    STATUS_SLOTS.forEach(function (sl) {
+      var dk = addDays(todayKey(), sl.off);
+      var txt = dailyGet(dk).status;
+      card.appendChild(h('button', {
+        class: 'dstat' + (sl.off === 0 ? ' is-today' : ''),
+        onclick: function () { editStatus(dk, sl); }
+      },
+        h('div', { class: 'dstat-head' },
+          h('span', { class: 'dstat-tag' }, sl.tag),
+          h('span', { class: 'dstat-date' }, sl.name + ' · ' + fmtDate(dk))
+        ),
+        h('div', { class: 'dstat-body' + (txt ? '' : ' faint') }, txt || '눌러서 메모 쓰기')
+      ));
+    });
+    card.appendChild(h('div', { class: 'tiny faint', style: 'margin-top:9px' },
+      '날짜가 바뀌면 내일 메모가 D-DAY로 자동으로 올라옵니다. 더 먼 날짜는 일정 탭에서 씁니다.'));
+    return card;
+  }
+
+  function editStatus(dateKey, slot) {
+    var ta = h('textarea', {
+      class: 'input', style: 'min-height:140px',
+      placeholder: '예: 대대 사격 훈련, 08:00 완전군장 집합\n예: 인원보고 시 파견 1명 포함'
+    });
+    ta.value = dailyGet(dateKey).status;
+
+    var body = h('div', null,
+      h('p', { class: 'small muted', style: 'margin:0 0 10px' },
+        (slot ? slot.tag + ' · ' : '') + fmtDateLong(dateKey)),
+      ta
+    );
+
+    var close = sheet('상태 메모', body, [
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '취소'),
+      h('button', {
+        class: 'btn btn-primary', onclick: function () {
+          var d = dailyEdit(dateKey);
+          d.status = ta.value.trim();
+          save();
+          close();
+          render();
+          toast(d.status ? '저장했습니다' : '메모를 비웠습니다');
+        }
+      }, '저장')
+    ]);
   }
 
   function personChip(m, dateKey) {
@@ -1863,6 +1931,19 @@
         }, '근무 편성')
       )
     );
+
+    var st = dailyGet(dk2).status;
+    detail.appendChild(h('button', {
+      class: 'dstat', style: 'margin-top:2px',
+      onclick: function () { editStatus(dk2, null); }
+    },
+      h('div', { class: 'dstat-head' },
+        h('span', { class: 'dstat-tag' }, '상태 메모'),
+        h('span', { class: 'dstat-date' }, daysUntil(dk2) === 0 ? '오늘'
+          : (daysUntil(dk2) > 0 ? 'D+' + daysUntil(dk2) : daysUntil(dk2) + '일'))
+      ),
+      h('div', { class: 'dstat-body' + (st ? '' : ' faint') }, st || '눌러서 메모 쓰기')
+    ));
 
     var lvs = leavesOn(dk2);
     detail.appendChild(h('div', { class: 'section-title', style: 'margin-top:4px' }, '부재 ' + lvs.length + '명'));

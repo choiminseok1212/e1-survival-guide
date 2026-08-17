@@ -113,6 +113,7 @@
   var S = load();
   var UI = {
     tab: 'today', date: todayKey(), month: monthKey(new Date()),
+    todayOffset: 0,       // 오늘(0) · D-1(1) · D-2(2) 중 보고 있는 화면
     rosterMode: 'list',   // 명단 | 사로표
     scopeRoom: null       // 한장 요약에서 선택한 생활관 (null = 소대 전체)
   };
@@ -731,13 +732,49 @@
 
   /* ==================== 화면: 오늘 ==================== */
 
+  /* 오늘 · D-1 · D-2 세 장을 같은 화면으로 넘겨 본다.
+   * 날짜를 기준으로 그리므로 하루가 지나면 D-1 이 오늘 자리로 올라온다.
+   */
+  var DAY_PAGES = [
+    { off: 0, tag: '오늘', word: '오늘' },
+    { off: 1, tag: 'D-1', word: '내일' },
+    { off: 2, tag: 'D-2', word: '모레' }
+  ];
+
+  function dayPage() {
+    return DAY_PAGES[UI.todayOffset] || DAY_PAGES[0];
+  }
+
+  function dayPageSwitch() {
+    var seg = h('div', { class: 'seg' });
+    DAY_PAGES.forEach(function (pg) {
+      var k = addDays(todayKey(), pg.off);
+      var d = fromKey(k);
+      var memo = dailyGet(k).status;
+      seg.appendChild(h('button', {
+        class: 'seg-btn seg-2', 'aria-pressed': UI.todayOffset === pg.off ? 'true' : 'false',
+        onclick: function () {
+          UI.todayOffset = pg.off;
+          render();
+          window.scrollTo(0, 0);
+        }
+      },
+        h('span', null, pg.tag, memo ? h('i', { class: 'seg-dot' }) : null),
+        h('span', { class: 'seg-sub' }, (d.getMonth() + 1) + '/' + d.getDate() + ' (' + DOW[d.getDay()] + ')')
+      ));
+    });
+    return seg;
+  }
+
   function viewToday() {
+    var page = dayPage();
+    var dk = addDays(todayKey(), page.off);
+    var isToday = page.off === 0;
     var now = new Date();
-    var dk = todayKey();
     var wrap = h('div');
     var all = roster();
 
-    wrap.appendChild(statusStrip());
+    wrap.appendChild(dayPageSwitch());
 
     if (!all.length) {
       wrap.appendChild(h('div', null,
@@ -761,47 +798,74 @@
       return wrap;
     }
 
-    /* 지금 근무 중 */
-    var live = liveDuties(now);
-    var liveCard = h('div', { class: 'card' },
-      h('div', { class: 'card-head' },
-        h('div', { class: 'card-title' }, '지금 근무 중'),
-        h('div', { class: 'tiny faint mono' }, pad(now.getHours()) + ':' + pad(now.getMinutes()))
-      )
-    );
-    if (!live.length) {
-      liveCard.appendChild(h('div', { class: 'small faint' }, '진행 중인 근무가 없습니다.'));
-    } else {
-      live.forEach(function (it) {
-        liveCard.appendChild(h('div', { class: 'slot is-live' },
-          h('div', { class: 'slot-head' },
-            h('span', { class: 'slot-label' }, it.duty.name + ' · ' + it.slot.label),
-            h('span', { class: 'slot-time' }, slotTimeText(it.slot))
-          ),
-          h('div', { class: 'slot-people' }, it.ids.map(function (id) {
-            return personChip(member(id), it.dateKey);
-          }))
-        ));
-      });
-    }
-    wrap.appendChild(liveCard);
+    /* 그날 상태 · 특이사항 */
+    var memo = dailyGet(dk).status;
+    wrap.appendChild(h('button', {
+      class: 'dstat' + (isToday ? ' is-today' : ''), style: 'margin-bottom:12px',
+      onclick: function () { editStatus(dk, page); }
+    },
+      h('div', { class: 'dstat-head' },
+        h('span', { class: 'dstat-tag' }, page.tag),
+        h('span', { class: 'dstat-date' }, page.word + ' · ' + fmtDate(dk) + ' 상태 · 특이사항')
+      ),
+      h('div', { class: 'dstat-body' + (memo ? '' : ' faint') }, memo || '눌러서 미리 적어두기')
+    ));
 
-    /* 내 다음 근무 */
+    /* 지금 근무 중 — 오늘 화면에서만 뜻이 있다 */
+    if (isToday) {
+      var live = liveDuties(now);
+      var liveCard = h('div', { class: 'card' },
+        h('div', { class: 'card-head' },
+          h('div', { class: 'card-title' }, '지금 근무 중'),
+          h('div', { class: 'tiny faint mono' }, pad(now.getHours()) + ':' + pad(now.getMinutes()))
+        )
+      );
+      if (!live.length) {
+        liveCard.appendChild(h('div', { class: 'small faint' }, '진행 중인 근무가 없습니다.'));
+      } else {
+        live.forEach(function (it) {
+          liveCard.appendChild(h('div', { class: 'slot is-live' },
+            h('div', { class: 'slot-head' },
+              h('span', { class: 'slot-label' }, it.duty.name + ' · ' + it.slot.label),
+              h('span', { class: 'slot-time' }, slotTimeText(it.slot))
+            ),
+            h('div', { class: 'slot-people' }, it.ids.map(function (id) {
+              return personChip(member(id), it.dateKey);
+            }))
+          ));
+        });
+      }
+      wrap.appendChild(liveCard);
+    }
+
+    /* 내 상황 — 오늘은 '다음 근무', 미리 보는 날은 '그날 내 근무' */
     if (S.meId && member(S.meId)) {
       var me = member(S.meId);
-      var nx = nextDutyOf(me.id, now);
       var lv = leaveOn(me.id, dk);
+      var mine = dutiesOf(me.id, dk);
+      var dutyText;
+      if (isToday) {
+        var nx = nextDutyOf(me.id, now);
+        dutyText = nx
+          ? (fmtDate(nx.dateKey) + ' ' + nx.duty.name + ' ' + nx.slot.label +
+            (slotTimeText(nx.slot) ? ' (' + slotTimeText(nx.slot) + ')' : ''))
+          : '예정 없음';
+      } else {
+        dutyText = mine.length
+          ? mine.map(function (x) {
+            return x.duty.name + ' ' + x.slot.label +
+              (slotTimeText(x.slot) ? ' (' + slotTimeText(x.slot) + ')' : '');
+          }).join(', ')
+          : '편성 없음';
+      }
       wrap.appendChild(h('div', { class: 'card' },
         h('div', { class: 'card-title' }, '내 상황 · ' + me.name),
         h('div', { class: 'kv' },
-          h('span', { class: 'k' }, '다음 근무'),
-          h('span', { class: 'strong' }, nx
-            ? (fmtDate(nx.dateKey) + ' ' + nx.duty.name + ' ' + nx.slot.label +
-              (slotTimeText(nx.slot) ? ' (' + slotTimeText(nx.slot) + ')' : ''))
-            : '예정 없음')
+          h('span', { class: 'k' }, isToday ? '다음 근무' : page.word + ' 근무'),
+          h('span', { class: 'strong' }, dutyText)
         ),
         h('div', { class: 'kv' },
-          h('span', { class: 'k' }, '오늘 상태'),
+          h('span', { class: 'k' }, page.word + ' 상태'),
           h('span', { class: 'strong' }, lv ? lv.type + ' 중' : '정상 근무')
         ),
         me.discharge ? h('div', { class: 'kv' },
@@ -811,10 +875,10 @@
       ));
     }
 
-    /* 오늘 근무 편성 */
+    /* 그날 근무 편성 */
     var todayCard = h('div', { class: 'card' },
       h('div', { class: 'card-head' },
-        h('div', { class: 'card-title' }, '오늘 근무 편성'),
+        h('div', { class: 'card-title' }, page.word + ' 근무 편성'),
         h('button', {
           class: 'btn btn-sm btn-ghost', onclick: function () {
             UI.date = dk;
@@ -841,14 +905,14 @@
         ));
       });
     });
-    if (!any) todayCard.appendChild(h('div', { class: 'small faint' }, '오늘 편성된 근무가 없습니다.'));
+    if (!any) todayCard.appendChild(h('div', { class: 'small faint' }, page.word + ' 편성된 근무가 없습니다.'));
     wrap.appendChild(todayCard);
 
     /* 오늘 부재자 */
     var lvs = leavesOn(dk);
     var lvCard = h('div', { class: 'card' },
       h('div', { class: 'card-head' },
-        h('div', { class: 'card-title' }, '오늘 부재 ' + (lvs.length ? '· ' + lvs.length + '명' : '')),
+        h('div', { class: 'card-title' }, page.word + ' 부재 ' + (lvs.length ? '· ' + lvs.length + '명' : '')),
         h('button', {
           class: 'btn btn-sm btn-ghost', onclick: function () { editLeave(null, dk); }
         }, '＋ 등록')
@@ -880,7 +944,7 @@
     all.forEach(function (m) {
       var lv = leaveOn(m.id, dk);
       var ds = dutiesOf(m.id, dk);
-      var liveNow = ds.some(function (x) { return isLive(dk, x.slot, now); });
+      var liveNow = isToday && ds.some(function (x) { return isLive(dk, x.slot, now); });
       var st = liveNow ? 'st-now' : (lv ? 'st-leave' : (ds.length ? 'st-duty' : ''));
       var label = liveNow ? '근무 중' : (lv ? lv.type : (ds.length ? ds[0].duty.name : '대기'));
       board.appendChild(h('button', {
@@ -898,50 +962,14 @@
       ),
       board,
       h('div', { class: 'legend' },
-        h('span', null, h('i', { style: 'background:var(--accent)' }), '근무 중'),
-        h('span', null, h('i', { style: 'background:var(--info)' }), '오늘 근무'),
+        isToday ? h('span', null, h('i', { style: 'background:var(--accent)' }), '근무 중') : null,
+        h('span', null, h('i', { style: 'background:var(--info)' }), page.word + ' 근무'),
         h('span', null, h('i', { style: 'background:var(--warn)' }), '부재'),
         h('span', null, h('i', { style: 'background:var(--line)' }), '대기')
       )
     ));
 
     return wrap;
-  }
-
-  /* ---------- D-DAY / D-1 / D-2 상태 메모 ----------
-   * 날짜를 키로 저장하므로 하루가 지나면 저절로 한 칸씩 당겨진다.
-   * (앱은 1분마다, 그리고 화면에 돌아올 때마다 다시 그린다)
-   */
-  var STATUS_SLOTS = [
-    { off: 0, tag: 'D-DAY', name: '오늘' },
-    { off: 1, tag: 'D-1', name: '내일' },
-    { off: 2, tag: 'D-2', name: '모레' }
-  ];
-
-  function statusStrip() {
-    var card = h('div', { class: 'card' },
-      h('div', { class: 'card-head' },
-        h('div', { class: 'card-title' }, '상태 · 특이사항'),
-        h('div', { class: 'tiny faint' }, '3일치 미리 쓰기')
-      )
-    );
-    STATUS_SLOTS.forEach(function (sl) {
-      var dk = addDays(todayKey(), sl.off);
-      var txt = dailyGet(dk).status;
-      card.appendChild(h('button', {
-        class: 'dstat' + (sl.off === 0 ? ' is-today' : ''),
-        onclick: function () { editStatus(dk, sl); }
-      },
-        h('div', { class: 'dstat-head' },
-          h('span', { class: 'dstat-tag' }, sl.tag),
-          h('span', { class: 'dstat-date' }, sl.name + ' · ' + fmtDate(dk))
-        ),
-        h('div', { class: 'dstat-body' + (txt ? '' : ' faint') }, txt || '눌러서 메모 쓰기')
-      ));
-    });
-    card.appendChild(h('div', { class: 'tiny faint', style: 'margin-top:9px' },
-      '날짜가 바뀌면 내일 메모가 D-DAY로 자동으로 올라옵니다. 더 먼 날짜는 일정 탭에서 씁니다.'));
-    return card;
   }
 
   function editStatus(dateKey, slot) {
@@ -2547,10 +2575,11 @@
   function render() {
     var tab = TABS.filter(function (t) { return t.id === UI.tab; })[0] || TABS[0];
 
-    document.getElementById('topbar-title').textContent = tab.title;
+    document.getElementById('topbar-title').textContent =
+      tab.id === 'today' ? dayPage().tag : tab.title;
     var sub = '';
     if (tab.id === 'today') {
-      sub = fmtDateLong(todayKey()) + (S.unit ? ' · ' + S.unit : '');
+      sub = fmtDateLong(addDays(todayKey(), dayPage().off)) + (S.unit ? ' · ' + S.unit : '');
     } else if (tab.id === 'summary') {
       sub = '점호 · 식사 · 불침번 보고 문구';
     } else if (tab.id === 'roster') {
@@ -2573,7 +2602,11 @@
     TABS.forEach(function (t) {
       bar.appendChild(h('button', {
         'aria-current': t.id === UI.tab ? 'page' : null,
-        onclick: function () { go(t.id); }
+        onclick: function () {
+          /* 하단 탭은 항상 '오늘' 한 칸. 누르면 오늘 화면으로 돌아온다. */
+          if (t.id === 'today') UI.todayOffset = 0;
+          go(t.id);
+        }
       }, h('span', { class: 'ico' }, t.ico), h('span', null, t.label)));
     });
   }

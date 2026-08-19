@@ -49,8 +49,15 @@
     duty: { label: '근무', tag: 'tag-duty', bar: 'st-duty' },
     leave: { label: '휴가', tag: 'tag-leave', bar: 'st-leave' },
     dispatch: { label: '파견', tag: 'tag-disp', bar: 'st-disp' },
+    off: { label: '휴무', tag: 'tag-off', bar: 'st-off' },
     work: { label: '일과', tag: 'tag-work', bar: 'st-work' },
     rest: { label: '휴식', tag: 'tag-rest', bar: 'st-rest' }
+  };
+
+  /* 휴무 종류 */
+  var OFF_KINDS = {
+    full: { key: 'full', label: '휴무', hint: '일과 전체' },
+    half: { key: 'half', label: '반투휴무', hint: '점심 이후 일과' }
   };
 
   var MEALS = [
@@ -78,7 +85,8 @@
       nightWatch: '23:00',    // 불침번 보고
       wakeLead: 10,           // 기상 예고 (분)
       workStart: '08:30',     // 일과 시작
-      workEnd: '17:30'        // 일과 종료 (이후는 휴식, 주말은 종일 휴식)
+      workEnd: '17:30',       // 일과 종료 (이후는 휴식, 주말은 종일 휴식)
+      halfOffFrom: '13:00'    // 반투휴무가 일과에 합류하는 시각
     };
   }
 
@@ -95,14 +103,16 @@
         ]
       },
       {
+        /* A → B → C → D 가 30분씩 돌아 2시간에 한 바퀴.
+         * roll 은 저녁점호 예외: D조는 미리 나가서 없는 것으로,
+         * A조는 곧 복귀하므로 있는 것으로 친다.
+         */
         id: 'd_cctv', name: 'CCTV', kind: 'slots', report: true,
         slots: [
-          { id: 'c1', label: '주간 1', start: '08:00', end: '12:00', need: 1 },
-          { id: 'c2', label: '주간 2', start: '12:00', end: '16:00', need: 1 },
-          { id: 'c3', label: '주간 3', start: '16:00', end: '20:00', need: 1 },
-          { id: 'c4', label: '야간 1', start: '20:00', end: '00:00', need: 1 },
-          { id: 'c5', label: '야간 2', start: '00:00', end: '04:00', need: 1 },
-          { id: 'c6', label: '야간 3', start: '04:00', end: '08:00', need: 1 }
+          { id: 'ca', label: 'A조', rep: { every: 120, offset: 0, dur: 30 }, need: 1, roll: 'present' },
+          { id: 'cb', label: 'B조', rep: { every: 120, offset: 30, dur: 30 }, need: 1, roll: '' },
+          { id: 'cc', label: 'C조', rep: { every: 120, offset: 60, dur: 30 }, need: 1, roll: '' },
+          { id: 'cd', label: 'D조', rep: { every: 120, offset: 90, dur: 30 }, need: 1, roll: 'absent' }
         ]
       },
       {
@@ -171,6 +181,24 @@
       base.times = merge(defaultTimes(), s.times);
       base.duties.forEach(function (d) {
         if (typeof d.report !== 'boolean') d.report = true;
+        d.slots.forEach(function (sl) {
+          if (typeof sl.roll !== 'string') sl.roll = '';
+        });
+      });
+      /* 손대지 않은 옛 CCTV(4시간 6교대)만 A~D조 반복 근무로 바꾼다 */
+      var old = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+      base.duties.forEach(function (d) {
+        if (d.id !== 'd_cctv') return;
+        var untouched = d.slots.length === 6 && d.slots.every(function (sl) {
+          return old.indexOf(sl.id) >= 0 && !sl.rep;
+        });
+        if (!untouched) return;
+        defaultDuties().forEach(function (def) {
+          if (def.id === 'd_cctv') d.slots = def.slots;
+        });
+        Object.keys(base.assign).forEach(function (dk) {
+          if (base.assign[dk].d_cctv) delete base.assign[dk].d_cctv;
+        });
       });
       return base;
     } catch (e) {
@@ -349,25 +377,61 @@
 
   /* ----- 시간대 ----- */
 
-  function slotWindow(dateKey, slot) {
-    if (!slot.start || !slot.end) return null;
+  /* 보통 슬롯은 start~end 한 구간이다. rep 가 붙으면 하루에 여러 번 도는
+   * 반복 근무다. 예) CCTV A조 = 2시간(every 120)마다 0분에 30분씩.
+   */
+  function slotWindows(dateKey, slot) {
+    var out = [];
+    if (slot.rep && slot.rep.dur) {
+      var every = Math.max(1, +slot.rep.every || 120);
+      var off = ((+slot.rep.offset || 0) % every + every) % every;
+      var dur = Math.max(1, +slot.rep.dur);
+      for (var m = off; m < 1440; m += every) {
+        var rs = fromKey(dateKey), re = fromKey(dateKey);
+        rs.setMinutes(m);
+        re.setMinutes(m + dur);
+        out.push([rs, re]);
+      }
+      return out;
+    }
+    if (!slot.start || !slot.end) return out;
     var s = fromKey(dateKey), e = fromKey(dateKey);
     var sp = slot.start.split(':'), ep = slot.end.split(':');
     s.setHours(+sp[0], +sp[1], 0, 0);
     e.setHours(+ep[0], +ep[1], 0, 0);
     if (e <= s) e.setDate(e.getDate() + 1);
-    return [s, e];
+    out.push([s, e]);
+    return out;
+  }
+
+  /** 첫 구간만 필요한 곳을 위한 짧은 이름 */
+  function slotWindow(dateKey, slot) {
+    var ws = slotWindows(dateKey, slot);
+    return ws.length ? ws[0] : null;
+  }
+
+  function repText(rep) {
+    var every = Math.max(1, +rep.every || 120);
+    var off = ((+rep.offset || 0) % every + every) % every;
+    var dur = Math.max(1, +rep.dur || 30);
+    var hh = Math.floor(off / 60), mm = off % 60;
+    if (every === 120) {
+      return (hh % 2 === 0 ? '짝수시' : '홀수시') + ' ' + (mm === 0 ? '정각' : mm + '분') + ' · ' + dur + '분';
+    }
+    if (every === 60) return '매시 ' + mm + '분 · ' + dur + '분';
+    return minToHm(off) + '부터 ' + every + '분마다 · ' + dur + '분';
   }
 
   function slotTimeText(slot) {
+    if (slot.rep && slot.rep.dur) return repText(slot.rep);
     if (!slot.start || !slot.end) return '';
     return slot.start + ' – ' + slot.end;
   }
 
   function isLive(dateKey, slot, now) {
-    var w = slotWindow(dateKey, slot);
-    if (!w) return false;
-    return now >= w[0] && now < w[1];
+    return slotWindows(dateKey, slot).some(function (w) {
+      return now >= w[0] && now < w[1];
+    });
   }
 
   /** 지금 진행 중인 근무 (어제 날짜의 야간 근무 포함) */
@@ -388,17 +452,22 @@
   function nextDutyOf(memberId, now) {
     for (var i = 0; i < 21; i++) {
       var dk = addDays(todayKey(), i);
-      var list = dutiesOf(memberId, dk).sort(function (a, b) {
-        return String(a.slot.start).localeCompare(String(b.slot.start));
-      });
-      for (var j = 0; j < list.length; j++) {
-        var w = slotWindow(dk, list[j].slot);
-        if (!w) {
-          if (i > 0 || dk === todayKey()) return list[j];
-          continue;
+      var best = null;
+      dutiesOf(memberId, dk).forEach(function (it) {
+        var ws = slotWindows(dk, it.slot);
+        if (!ws.length) {
+          /* 일 단위 근무는 그날이 지나지 않았으면 예정으로 본다 */
+          var dayStart = fromKey(dk), dayEnd = fromKey(dk);
+          dayEnd.setDate(dayEnd.getDate() + 1);
+          if (dayEnd > now && (!best || dayStart < best.at)) best = { at: dayStart, it: it };
+          return;
         }
-        if (w[1] > now) return list[j];
-      }
+        ws.forEach(function (w) {
+          if (w[1] <= now) return;
+          if (!best || w[0] < best.at) best = { at: w[0], it: it };
+        });
+      });
+      if (best) return best.it;
     }
     return null;
   }
@@ -497,7 +566,7 @@
   /* ==================== 그날의 수동 입력 ==================== */
 
   function dailyBlank() {
-    return { seonsik: [], chuimin: [], yeondeung: [], temp: {}, notes: {}, status: '' };
+    return { seonsik: [], chuimin: [], yeondeung: [], off: {}, temp: {}, notes: {}, status: '' };
   }
 
   /** 읽기 전용 (저장소를 건드리지 않음) */
@@ -512,6 +581,7 @@
     if (!Array.isArray(d.seonsik)) d.seonsik = [];
     if (!Array.isArray(d.chuimin)) d.chuimin = [];
     if (!Array.isArray(d.yeondeung)) d.yeondeung = [];
+    if (!d.off || typeof d.off !== 'object') d.off = {};
     if (!d.temp) d.temp = {};
     if (!d.notes) d.notes = {};
     if (typeof d.status !== 'string') d.status = '';
@@ -528,13 +598,29 @@
         d.slots.forEach(function (sl) {
           if (hit) return;
           if (assignedIds(dk, d.id, sl.id).indexOf(memberId) < 0) return;
-          var w = slotWindow(dk, sl);
-          var on = w ? (when >= w[0] && when < w[1]) : (dk === dateKey);
+          var ws = slotWindows(dk, sl);
+          var on = ws.length
+            ? ws.some(function (w) { return when >= w[0] && when < w[1]; })
+            : (dk === dateKey);
           if (on) hit = { duty: d, slot: sl, dateKey: dk };
         });
       });
     });
     return hit;
+  }
+
+  /** 그날 휴무 종류 ('full' | 'half' | null) */
+  function offKindOf(memberId, dateKey) {
+    var o = dailyGet(dateKey).off || {};
+    return o[memberId] === 'full' || o[memberId] === 'half' ? o[memberId] : null;
+  }
+
+  /** 그 시각에 휴무 중인가 (반투휴무는 점심 전까지) */
+  function isOffAt(memberId, dateKey, when) {
+    var kind = offKindOf(memberId, dateKey);
+    if (!kind) return false;
+    if (kind === 'full') return true;
+    return (when.getHours() * 60 + when.getMinutes()) < hmToMin(S.times.halfOffFrom);
   }
 
   /** 일과 시간인가 (주말은 종일 휴식) */
@@ -556,7 +642,8 @@
     var lv = leaveOn(m.id, dateKey);
     if (lv) return lv.type === DISPATCH_TYPE ? STATES.dispatch : STATES.leave;
     if (onDutyAt(m.id, dateKey, when)) return STATES.duty;
-    return isWorkTime(dateKey, when) ? STATES.work : STATES.rest;
+    if (!isWorkTime(dateKey, when)) return STATES.rest;
+    return isOffAt(m.id, dateKey, when) ? STATES.off : STATES.work;
   }
 
   /* ==================== 인원 집계 ==================== */
@@ -586,9 +673,16 @@
       if (!d.report) return;
       var hit = [];
       d.slots.forEach(function (sl) {
+        /* 저녁점호에서는 슬롯별 예외를 먼저 본다.
+         * present = 곧 복귀하므로 있는 것으로, absent = 미리 나가므로 없는 것으로.
+         */
+        var forced = opts.eveningRoll ? (sl.roll || '') : '';
+        if (forced === 'present') return;
         [addDays(dateKey, -1), dateKey].forEach(function (dk) {
-          var w = slotWindow(dk, sl);
-          var on = w ? (when >= w[0] && when < w[1]) : (dk === dateKey);
+          var ws = slotWindows(dk, sl);
+          var on = forced === 'absent'
+            ? (dk === dateKey)
+            : (ws.length ? ws.some(function (w) { return when >= w[0] && when < w[1]; }) : (dk === dateKey));
           if (!on) return;
           assignedIds(dk, d.id, sl.id).forEach(function (id) {
             if (!inScope[id] || absent[id] || taken[id]) return;
@@ -614,6 +708,15 @@
     var seonsik = pick('seonsik');
     var yeondeung = pick('yeondeung');
 
+    /* 휴무는 부대 안에 있으므로 현재원에서 빼지 않는다. 내역으로만 적는다. */
+    var dayOff = dailyGet(dateKey).off || {};
+    var offFull = [], offHalf = [];
+    list.forEach(function (m) {
+      if (absent[m.id]) return;
+      if (dayOff[m.id] === 'full') offFull.push(m.id);
+      else if (dayOff[m.id] === 'half') offHalf.push(m.id);
+    });
+
     var duty = dutyIds.length + chuimin.length;
     var present = list.length - leave.length - dispatch.length - duty;
     if (opts.seonsik) present -= seonsik.length;
@@ -627,6 +730,7 @@
       leave: leave, dispatch: dispatch,
       byType: byType, dutyIds: dutyIds, chuimin: chuimin,
       seonsik: seonsik, yeondeung: yeondeung,
+      offFull: offFull, offHalf: offHalf, off: offFull.length + offHalf.length,
       duty: duty, detail: detail.join(', '),
       present: Math.max(0, present)
     };
@@ -638,19 +742,35 @@
     return roomId ? roomName(roomId) + ' ' : (S.unit ? S.unit + ' ' : '');
   }
 
-  function rollText(label, hm, dateKey, roomId) {
-    var c = counts(dateKey, hm, roomId);
-    return head(roomId) + label + ' (' + hm + ') 총원 ' + c.total + '명, 휴가 ' + c.leave.length +
-      '명, 파견 ' + c.dispatch.length + '명, 근무 ' + c.duty + '명' +
-      (c.detail ? '(' + c.detail + ')' : '') + ', 현재원 ' + c.present + '명';
+  /** 근무 인원 문구 (0명이면 아예 적지 않는다) */
+  function dutyPart(c) {
+    return c.duty > 0 ? ['근무 ' + c.duty + '명' + (c.detail ? '(' + c.detail + ')' : '')] : [];
+  }
+
+  /** 휴무 인원 문구 (0명이면 아예 적지 않는다) */
+  function offPart(c) {
+    if (!c.off) return [];
+    return ['휴무 ' + c.off + '명' + (c.offHalf.length ? '(반투 ' + c.offHalf.length + '명)' : '')];
+  }
+
+  /** 총원 · 휴가 · 파견 · 근무 · 휴무 공통 앞부분 */
+  function baseParts(c) {
+    return ['총원 ' + c.total + '명', '휴가 ' + c.leave.length + '명', '파견 ' + c.dispatch.length + '명']
+      .concat(dutyPart(c), offPart(c));
+  }
+
+  function rollText(label, hm, dateKey, roomId, evening) {
+    var c = counts(dateKey, hm, roomId, { eveningRoll: !!evening });
+    return head(roomId) + label + ' (' + hm + ') ' +
+      baseParts(c).join(', ') + ', 현재원 ' + c.present + '명';
   }
 
   function mealText(meal, dateKey, roomId) {
     var hm = servingTime(meal.id, dateKey);
     var c = counts(dateKey, hm, roomId, { seonsik: true });
-    return head(roomId) + meal.label + ' (' + servingNo(meal.id, dateKey) + '배식 ' + hm + ') 총원 ' +
-      c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' + c.dispatch.length + '명, 근무 ' +
-      c.duty + '명, 선식 ' + c.seonsik.length + '명, 현재원 ' + c.present + '명';
+    return head(roomId) + meal.label + ' (' + servingNo(meal.id, dateKey) + '배식 ' + hm + ') ' +
+      baseParts(c).concat(['선식 ' + c.seonsik.length + '명']).join(', ') +
+      ', 현재원 ' + c.present + '명';
   }
 
   function roomsReportText(dateKey) {
@@ -658,8 +778,7 @@
     var lines = ['생활관 인원보고 (' + hm + ')'];
     S.rooms.forEach(function (r) {
       var c = counts(dateKey, hm, r.id);
-      lines.push(r.name + ' 총원 ' + c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' +
-        c.dispatch.length + '명, 근무 ' + c.duty + '명, 현재원 ' + c.present + '명');
+      lines.push(r.name + ' ' + baseParts(c).join(', ') + ', 현재원 ' + c.present + '명');
     });
     var un = membersInRoom(null);
     if (un.length) lines.push('생활관 미지정 ' + un.length + '명');
@@ -674,10 +793,13 @@
     [dateKey, addDays(dateKey, 1)].forEach(function (dk) {
       S.duties.forEach(function (d) {
         d.slots.forEach(function (sl) {
-          var w = slotWindow(dk, sl);
-          if (!w) return;
-          var mins = (w[0] - from) / 60000;
-          if (mins <= 0 || mins > 480) return;
+          /* 반복 근무는 다가오는 첫 회차만 안내한다 */
+          var up = slotWindows(dk, sl).filter(function (x) {
+            var mm = (x[0] - from) / 60000;
+            return mm > 0 && mm <= 480;
+          });
+          if (!up.length) return;
+          var w = up[0];
           assignedIds(dk, d.id, sl.id).forEach(function (id) {
             var m = member(id);
             if (!m || leaveOn(id, dk)) return;
@@ -700,9 +822,8 @@
     var c = counts(dateKey, hm, roomId, { yeondeung: true });
     var day = dailyGet(dateKey);
     var lines = [head(roomId) + '불침번 보고 (' + hm + ')'];
-    lines.push('총원 ' + c.total + '명, 휴가 ' + c.leave.length + '명, 파견 ' + c.dispatch.length +
-      '명, 근무 ' + c.duty + '명' + (c.detail ? '(' + c.detail + ')' : '') +
-      ', 연등 ' + c.yeondeung.length + '명, 현재원 ' + c.present + '명');
+    lines.push(['총원 ' + c.total + '명', '휴가 ' + c.leave.length + '명', '파견 ' + c.dispatch.length + '명']
+      .concat(dutyPart(c), ['연등 ' + c.yeondeung.length + '명', '현재원 ' + c.present + '명']).join(', '));
     var temp = roomId ? day.temp[roomId] : null;
     lines.push('생활관 온도 ' + (temp ? temp + '도' : '(미입력)'));
     var notes = [].concat(wakeLines(dateKey, hm, roomId));
@@ -1002,6 +1123,36 @@
     }
     wrap.appendChild(lvCard);
 
+    /* 그날 휴무 */
+    var offMap = dailyGet(dk).off || {};
+    var offList = all.filter(function (m) { return offMap[m.id]; });
+    var offCard = h('div', { class: 'card' },
+      h('div', { class: 'card-head' },
+        h('div', { class: 'card-title' }, page.word + ' 휴무 ' + (offList.length ? '· ' + offList.length + '명' : '')),
+        h('button', {
+          class: 'btn btn-sm btn-ghost', onclick: function () { editOffDuty(dk, null); }
+        }, '＋ 지정')
+      )
+    );
+    if (!offList.length) {
+      offCard.appendChild(h('div', { class: 'small faint' }, '휴무 인원이 없습니다.'));
+    } else {
+      offList.forEach(function (m) {
+        var kind = OFF_KINDS[offMap[m.id]];
+        offCard.appendChild(h('button', {
+          class: 'mrow', onclick: function () { editOffDuty(dk, null); }
+        },
+          rankBadge(m),
+          h('div', { class: 'grow' },
+            h('div', { class: 'mrow-name ellipsis' }, m.name),
+            h('div', { class: 'mrow-meta' }, kind.hint + ' · 식사집합 참여')
+          ),
+          h('span', { class: 'tag tag-off' }, kind.label)
+        ));
+      });
+    }
+    wrap.appendChild(offCard);
+
     /* 소대 현황판 */
     var board = h('div', { class: 'board' });
     var when = isToday ? now : atTime(dk, '12:00');
@@ -1058,7 +1209,7 @@
   }
 
   function stateLegend() {
-    var keys = ['work', 'rest', 'duty', 'leave', 'dispatch'];
+    var keys = ['work', 'rest', 'off', 'duty', 'leave', 'dispatch'];
     return h('div', { class: 'legend' }, keys.map(function (k) {
       return h('span', null, h('i', { class: 'lg ' + STATES[k].bar }), STATES[k].label);
     }));
@@ -1110,6 +1261,7 @@
       { k: '파견', v: c.dispatch.length },
       { k: '근무', v: c.duty }
     ];
+    if (c.off && extra !== 'yeondeung') items.push({ k: '휴무', v: c.off });
     if (extra === 'seonsik') items.push({ k: '선식', v: c.seonsik.length });
     if (extra === 'yeondeung') items.push({ k: '연등', v: c.yeondeung.length });
     items.push({ k: '현재원', v: c.present, hi: true });
@@ -1278,18 +1430,24 @@
       }
 
       /* 점호 */
-      var cr = counts(dk, d.hm, rid);
+      var evening = d.id === 'eroll';
+      var cr = counts(dk, d.hm, rid, { eveningRoll: evening });
       wrap.appendChild(reportCard({
         title: d.title, when: d.hm, now: nowId === d.id,
         stats: countStats(cr),
-        formula: '현재원 = 총원 − 휴가 − 파견 − 근무',
+        formula: '현재원 = 총원 − 휴가 − 파견 − 근무' + (evening ? ' (조별 점호 예외 반영)' : ''),
         blocks: [{
-          text: rollText(d.title, d.hm, dk, rid),
-          buttons: h('button', {
-            class: 'btn btn-sm', onclick: function () {
-              pickDailyMembers(dk, 'chuimin', '근무취침 인원', rid);
-            }
-          }, '근무취침 지정')
+          text: rollText(d.title, d.hm, dk, rid, evening),
+          buttons: h('span', { class: 'btn-row', style: 'display:flex;gap:8px;flex:2' },
+            h('button', {
+              class: 'btn btn-sm', onclick: function () {
+                pickDailyMembers(dk, 'chuimin', '근무취침 인원', rid);
+              }
+            }, '근무취침'),
+            h('button', {
+              class: 'btn btn-sm', onclick: function () { editOffDuty(dk, rid); }
+            }, '휴무')
+          )
         }]
       }));
     });
@@ -1349,6 +1507,78 @@
           });
           var d = dailyEdit(dateKey);
           d[field] = keep.concat(sel);
+          save();
+          close();
+          render();
+          toast('저장했습니다');
+        }
+      }, '저장')
+    ]);
+  }
+
+  /** 휴무 지정 — 눌러서 없음 → 휴무 → 반투휴무 로 돈다 */
+  function editOffDuty(dateKey, roomId) {
+    var cur = dailyGet(dateKey).off || {};
+    var scope = scopeList(roomId);
+    if (!scope.length) {
+      toast('이 범위에 소대원이 없습니다');
+      return;
+    }
+    var draft = {};
+    Object.keys(cur).forEach(function (k) { draft[k] = cur[k]; });
+
+    var list = h('div', { class: 'mlist' });
+    scope.forEach(function (m) {
+      var lv = leaveOn(m.id, dateKey);
+      var tag = h('span', { class: 'tag' });
+      function paint() {
+        var k = draft[m.id];
+        tag.className = 'tag ' + (k ? 'tag-off' : 'tag-rest');
+        tag.textContent = k ? OFF_KINDS[k].label : '없음';
+      }
+      paint();
+      var row = h('button', { class: 'picker-row' },
+        rankBadge(m, true),
+        h('span', { class: 'grow' },
+          h('span', { class: 'mrow-name' }, m.name),
+          h('span', { class: 'mrow-meta' }, lv ? lv.type + ' 중' :
+            (roomName(m.roomId || null) + (m.saro ? ' ' + m.saro + '사로' : '')))
+        ),
+        tag
+      );
+      row.addEventListener('click', function () {
+        var k = draft[m.id];
+        if (!k) draft[m.id] = 'full';
+        else if (k === 'full') draft[m.id] = 'half';
+        else delete draft[m.id];
+        paint();
+      });
+      list.appendChild(row);
+    });
+
+    var body = h('div', null,
+      h('p', { class: 'small muted', style: 'margin:0 0 10px' },
+        '눌러서 없음 → 휴무 → 반투휴무 로 바꿉니다. 휴무는 일과를 하지 않고, ' +
+        '반투휴무는 ' + S.times.halfOffFrom + ' 부터 일과에 합류합니다. 둘 다 식사집합은 참여하고 ' +
+        '현재원에도 그대로 들어갑니다.'),
+      list
+    );
+
+    var close = sheet('휴무 지정 · ' + fmtDate(dateKey), body, [
+      h('button', { class: 'btn btn-ghost', onclick: function () { close(); } }, '취소'),
+      h('button', {
+        class: 'btn btn-primary', onclick: function () {
+          var next = {};
+          /* 다른 생활관 지정은 그대로 두고 이 범위만 교체 */
+          Object.keys(cur).forEach(function (id) {
+            var m = member(id);
+            if (m && roomId && (m.roomId || null) !== roomId) next[id] = cur[id];
+          });
+          scope.forEach(function (m) {
+            if (draft[m.id]) next[m.id] = draft[m.id];
+          });
+          var d = dailyEdit(dateKey);
+          d.off = next;
           save();
           close();
           render();
@@ -2261,7 +2491,8 @@
         '명단 · 사로표 · 현황판의 상태를 이 시간으로 가릅니다. 일과 시간 안이면 ' +
         '일과, 벗어나면 휴식입니다. 주말은 종일 휴식으로 봅니다.'),
       timeField('일과 시작', 'workStart'),
-      timeField('일과 종료', 'workEnd')
+      timeField('일과 종료', 'workEnd'),
+      timeField('반투휴무가 일과에 합류하는 시각', 'halfOffFrom')
     ));
 
     /* 배식 */
@@ -2461,6 +2692,48 @@
         st.addEventListener('change', function () { sl.start = st.value; });
         en.addEventListener('change', function () { sl.end = en.value; });
         nd.addEventListener('change', function () { sl.need = Math.max(0, +nd.value || 0); });
+
+        /* 반복 근무 (CCTV A~D조처럼 하루에 여러 번 도는 경우) */
+        var isRep = !!(sl.rep && sl.rep.dur);
+        var every = h('input', { class: 'input', type: 'number', min: '5', max: '1440', value: isRep ? sl.rep.every : 120 });
+        var offIn = h('input', { class: 'input', type: 'number', min: '0', max: '1439', value: isRep ? sl.rep.offset : 0 });
+        var durIn = h('input', { class: 'input', type: 'number', min: '5', max: '720', value: isRep ? sl.rep.dur : 30 });
+        var preview = h('div', { class: 'tiny faint', style: 'margin-top:6px' });
+        function syncRep() {
+          sl.rep = {
+            every: Math.max(5, +every.value || 120),
+            offset: Math.max(0, +offIn.value || 0),
+            dur: Math.max(5, +durIn.value || 30)
+          };
+          preview.textContent = '→ ' + repText(sl.rep);
+        }
+        [every, offIn, durIn].forEach(function (inp) {
+          inp.addEventListener('change', function () {
+            syncRep();
+            drawSlots();
+          });
+        });
+        if (isRep) preview.textContent = '→ ' + repText(sl.rep);
+
+        var repChip = h('button', {
+          class: 'chip', 'aria-pressed': isRep ? 'true' : 'false',
+          onclick: function () {
+            if (sl.rep && sl.rep.dur) delete sl.rep;
+            else syncRep();
+            drawSlots();
+          }
+        }, '반복 근무');
+
+        /* 저녁점호 예외 */
+        var rollSel = h('select', { class: 'input' });
+        [['', '자동 (시간대로 판단)'], ['present', '있는 것으로 (곧 복귀)'], ['absent', '없는 것으로 (미리 나감)']]
+          .forEach(function (o) {
+            var op = h('option', { value: o[0] }, o[1]);
+            if ((sl.roll || '') === o[0]) op.selected = true;
+            rollSel.appendChild(op);
+          });
+        rollSel.addEventListener('change', function () { sl.roll = rollSel.value; });
+
         slotWrap.appendChild(h('div', { style: 'border:1px solid var(--line-soft);border-radius:12px;padding:10px;margin-bottom:10px' },
           h('div', { class: 'row row-between', style: 'margin-bottom:8px' },
             h('span', { class: 'tiny faint' }, (idx + 1) + '번째 시간대'),
@@ -2472,11 +2745,25 @@
             }, '삭제')
           ),
           h('div', { class: 'row', style: 'gap:8px;margin-bottom:8px' }, lab),
-          h('div', { class: 'row', style: 'gap:8px' },
-            h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '시작'), st),
-            h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '종료'), en),
-            h('div', { style: 'width:76px' }, h('div', { class: 'tiny faint' }, '인원'), nd)
-          )
+          h('div', { style: 'margin-bottom:8px' }, repChip),
+          isRep
+            ? h('div', null,
+              h('div', { class: 'row', style: 'gap:8px' },
+                h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '간격(분)'), every),
+                h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '시작 오프셋(분)'), offIn),
+                h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '길이(분)'), durIn)
+              ),
+              preview,
+              h('div', { class: 'row', style: 'gap:8px;margin-top:8px' },
+                h('div', { style: 'width:76px' }, h('div', { class: 'tiny faint' }, '인원'), nd))
+            )
+            : h('div', { class: 'row', style: 'gap:8px' },
+              h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '시작'), st),
+              h('div', { class: 'grow' }, h('div', { class: 'tiny faint' }, '종료'), en),
+              h('div', { style: 'width:76px' }, h('div', { class: 'tiny faint' }, '인원'), nd)
+            ),
+          h('div', { style: 'margin-top:8px' },
+            h('div', { class: 'tiny faint' }, '저녁점호 처리'), rollSel)
         ));
       });
     }

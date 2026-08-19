@@ -15,6 +15,7 @@
   --danger: #d9614f;
   --info: #4d8fc7;
   --disp: #9b8ad4;
+  --off: #4fb3ad;
   --radius: 14px;
   --tap: 46px;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -290,10 +291,11 @@ textarea.input { min-height: 76px; resize: vertical; }
 .tag-now { background: rgba(78, 166, 122, 0.18); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.35); }
 .tag-me { background: rgba(78, 166, 122, 0.16); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.32); }
 
-/* 상태 5종: 일과 · 휴식 · 근무 · 휴가 · 파견 */
+/* 상태: 일과 · 휴식 · 휴무 · 근무 · 휴가 · 파견 */
 .tag-work { background: rgba(78, 166, 122, 0.14); color: #7fd0a3; border-color: rgba(78, 166, 122, 0.3); }
 .tag-rest { background: var(--bg-elev-2); color: var(--text-dim); border-color: var(--line-soft); }
 .tag-disp { background: rgba(155, 138, 212, 0.16); color: #bda9ea; border-color: rgba(155, 138, 212, 0.34); }
+.tag-off { background: rgba(79, 179, 173, 0.16); color: #79d2cc; border-color: rgba(79, 179, 173, 0.34); }
 
 /* ---------- board (한눈에) ---------- */
 
@@ -337,6 +339,7 @@ textarea.input { min-height: 76px; resize: vertical; }
 .board-cell.st-work::after { background: var(--accent); }
 .board-cell.st-rest::after { background: var(--line); }
 .board-cell.st-disp::after { background: var(--disp); }
+.board-cell.st-off::after { background: var(--off); }
 
 /* ---------- duty slots ---------- */
 
@@ -645,6 +648,7 @@ textarea.input { min-height: 76px; resize: vertical; }
 .saro-cell.st-work::after { background: var(--accent); }
 .saro-cell.st-rest::after { background: var(--line); }
 .saro-cell.st-disp::after { background: var(--disp); }
+.saro-cell.st-off::after { background: var(--off); }
 
 /* ---------- 인원 숫자 ---------- */
 
@@ -704,6 +708,7 @@ textarea.input { min-height: 76px; resize: vertical; }
 .legend i.lg.st-duty { background: var(--info); }
 .legend i.lg.st-leave { background: var(--warn); }
 .legend i.lg.st-disp { background: var(--disp); }
+.legend i.lg.st-off { background: var(--off); }
 
 .hr { height: 1px; background: var(--line-soft); margin: 16px 0; border: 0; }
 

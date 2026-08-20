@@ -753,10 +753,17 @@
     return ['휴무 ' + c.off + '명' + (c.offHalf.length ? '(반투 ' + c.offHalf.length + '명)' : '')];
   }
 
+  /** 총원 · 휴가 · 파견. 휴가는 0명이면 적지 않는다. */
+  function headParts(c) {
+    var out = ['총원 ' + c.total + '명'];
+    if (c.leave.length) out.push('휴가 ' + c.leave.length + '명');
+    out.push('파견 ' + c.dispatch.length + '명');
+    return out;
+  }
+
   /** 총원 · 휴가 · 파견 · 근무 · 휴무 공통 앞부분 */
   function baseParts(c) {
-    return ['총원 ' + c.total + '명', '휴가 ' + c.leave.length + '명', '파견 ' + c.dispatch.length + '명']
-      .concat(dutyPart(c), offPart(c));
+    return headParts(c).concat(dutyPart(c), offPart(c));
   }
 
   function rollText(label, hm, dateKey, roomId, evening) {
@@ -822,7 +829,7 @@
     var c = counts(dateKey, hm, roomId, { yeondeung: true });
     var day = dailyGet(dateKey);
     var lines = [head(roomId) + '불침번 보고 (' + hm + ')'];
-    lines.push(['총원 ' + c.total + '명', '휴가 ' + c.leave.length + '명', '파견 ' + c.dispatch.length + '명']
+    lines.push(headParts(c)
       .concat(dutyPart(c), ['연등 ' + c.yeondeung.length + '명', '현재원 ' + c.present + '명']).join(', '));
     var temp = roomId ? day.temp[roomId] : null;
     lines.push('생활관 온도 ' + (temp ? temp + '도' : '(미입력)'));

@@ -1299,11 +1299,82 @@
     return card;
   }
 
+  /** 이름 나열 (너무 길면 줄인다) */
+  function nameList(ids, max) {
+    max = max || 4;
+    var names = ids.map(function (id) {
+      var m = member(id);
+      return m ? m.name : '';
+    }).filter(Boolean);
+    if (names.length <= max) return names.join('·');
+    return names.slice(0, max).join('·') + ' 외 ' + (names.length - max) + '명';
+  }
+
+  /** 포스트잇: 그날 전부를 글자로만 6줄 안에 눌러 담는다 */
+  function digestLines(dateKey, roomId) {
+    var isTd = dateKey === todayKey();
+    var hm = isTd ? fmtHm(new Date()) : '12:00';
+    var c = counts(dateKey, hm, roomId);
+    var day = dailyGet(dateKey);
+    var d = fromKey(dateKey);
+    var lines = [];
+
+    lines.push((d.getMonth() + 1) + '/' + d.getDate() + '(' + DOW[d.getDay()] + ') ' +
+      (roomId ? roomName(roomId) : (S.unit || '소대')) +
+      ' · 총원 ' + c.total + ' · 현재원 ' + c.present);
+
+    var nos = MEALS.map(function (m) { return servingNo(m.id, dateKey); });
+    var same = nos[0] === nos[1] && nos[1] === nos[2];
+    lines.push('식사 ' + (same ? nos[0] + '배식 ' : '') + MEALS.map(function (m, i) {
+      return servingTime(m.id, dateKey) + (same ? '' : '(' + nos[i] + ')');
+    }).join('·'));
+
+    if (c.duty) {
+      var duties = c.byType.map(function (t) { return t.name + ' ' + nameList(t.ids, 2); });
+      if (c.chuimin.length) duties.push('취침 ' + nameList(c.chuimin, 2));
+      lines.push('근무 ' + c.duty + ' · ' + duties.join(', '));
+    }
+
+    var away = [];
+    if (c.leave.length) away.push('휴가 ' + c.leave.length + ' ' + nameList(c.leave));
+    if (c.dispatch.length) away.push('파견 ' + c.dispatch.length + ' ' + nameList(c.dispatch));
+    if (away.length) lines.push(away.join(' / '));
+
+    if (c.off) {
+      var offs = [];
+      if (c.offFull.length) offs.push('휴무 ' + nameList(c.offFull));
+      if (c.offHalf.length) offs.push('반투 ' + nameList(c.offHalf));
+      lines.push(offs.join(' / '));
+    }
+
+    if (day.status) lines.push('특이사항 ' + day.status.replace(/\s*\n\s*/g, ' / '));
+
+    return lines.slice(0, 6);
+  }
+
+  function postIt(dateKey, roomId) {
+    var lines = digestLines(dateKey, roomId);
+    var text = lines.join('\n');
+    /* 한 줄이 길어져도 줄바꿈 대신 …으로 잘라 여섯 줄을 넘기지 않는다 */
+    return h('button', {
+      class: 'postit', title: '눌러서 복사',
+      onclick: function () { copyText(text, '요약을 복사했습니다'); }
+    }, lines.map(function (ln) {
+      return h('span', { class: 'postit-line' }, ln);
+    }));
+  }
+
   function viewSummary() {
     var dk = UI.date;
     var wrap = h('div');
     var now = new Date();
     var isToday = dk === todayKey();
+
+    var rid = UI.scopeRoom;
+    if (rid && !room(rid)) UI.scopeRoom = rid = null;
+
+    /* 포스트잇 — 이 화면에서 제일 먼저 보이는 자리 */
+    if (S.members.length) wrap.appendChild(postIt(dk, rid));
 
     wrap.appendChild(h('div', { class: 'datebar' },
       h('button', { class: 'btn btn-sm', onclick: function () { UI.date = addDays(dk, -1); render(); } }, '‹'),
@@ -1337,11 +1408,6 @@
       }, r.name));
     });
     wrap.appendChild(chips);
-
-    var rid = UI.scopeRoom;
-    if (rid && !room(rid)) {
-      UI.scopeRoom = rid = null;
-    }
 
     /* 지금 기준 현황 */
     var nowHm = isToday ? fmtHm(now) : '12:00';

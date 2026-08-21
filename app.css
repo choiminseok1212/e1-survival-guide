@@ -804,3 +804,50 @@ textarea.input { min-height: 76px; resize: vertical; }
 }
 
 .seg-btn[aria-pressed="true"] .seg-dot { background: var(--text); }
+
+/* ---------- 포스트잇 요약 ---------- */
+
+.postit {
+  display: block;
+  position: relative;
+  width: 100%;
+  margin: 6px 0 16px;
+  padding: 15px 17px 17px;
+  border: 0;
+  border-radius: 2px;
+  background: #f2dc7c;
+  background-image: linear-gradient(180deg, #f6e392 0%, #efd66a 100%);
+  color: #241f0c;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.66;
+  letter-spacing: -0.015em;
+  transform: rotate(-0.5deg);
+  box-shadow: 0 9px 20px rgba(0, 0, 0, 0.4), 0 1px 0 rgba(255, 255, 255, 0.35) inset;
+  overflow: hidden;
+}
+
+/* 줄마다 한 줄로 고정 — 길면 …으로 자른다 (최대 6줄) */
+.postit-line {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.postit:active { transform: rotate(-0.5deg) scale(0.995); }
+
+/* 오른쪽 아래 접힌 모서리 */
+.postit::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 18px 18px;
+  border-color: transparent transparent var(--bg) transparent;
+  filter: drop-shadow(-2px -2px 2px rgba(0, 0, 0, 0.22));
+}

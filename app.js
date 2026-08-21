@@ -66,14 +66,17 @@
     { id: 'd', name: '저녁', label: '저녁식사집합' }
   ];
 
+  /* 설정 마이그레이션 번호. 올리면 다음 실행 때 배식 기준이 새로 맞춰진다. */
+  var SETTINGS_VERSION = 2;
+
   function defaultServing() {
     return {
       count: 4,                                      // 총 배식 수
       step: 10,                                      // 배식 간격(분)
       autoRotate: true,                              // 주마다 순번 회전
-      anchor: todayKey(),                            // 회전 기준 주
-      order: { b: 4, l: 4, d: 4 },                   // 기준 주의 우리 배식 순번
-      base: { b: '08:00', l: '11:30', d: '17:30' }   // 1배식 시각
+      anchor: '2026-08-17',                          // 이 주(월요일 시작)가 기준
+      order: { b: 2, l: 2, d: 2 },                   // 기준 주는 2배식, 다음 주 3배식
+      base: { b: '08:00', l: '11:30', d: '17:20' }   // 1배식 시각
     };
   }
 
@@ -142,7 +145,9 @@
 
   /* ==================== 상태 ==================== */
 
+  var migrated = false;   // 설정 마이그레이션이 돌았으면 바로 저장한다
   var S = load();
+  if (migrated) save();
   var UI = {
     tab: 'today', date: todayKey(), month: monthKey(new Date()),
     todayOffset: 0,       // 오늘(0) · D-1(1) · D-2(2) 중 보고 있는 화면
@@ -152,7 +157,7 @@
 
   function blankState() {
     return {
-      v: 1, unit: '', meId: null,
+      v: 1, sv: SETTINGS_VERSION, unit: '', meId: null,
       members: [], rooms: [], duties: defaultDuties(),
       assign: {}, leaves: [], daily: {},
       serving: defaultServing(), times: defaultTimes()
@@ -175,9 +180,18 @@
       base.leaves = Array.isArray(s.leaves) ? s.leaves : [];
       base.daily = s.daily && typeof s.daily === 'object' ? s.daily : {};
       /* 이전 버전에서 올라온 데이터에 새 설정 채우기 */
+      base.sv = +s.sv || 1;
       base.serving = merge(defaultServing(), s.serving);
       base.serving.order = merge(defaultServing().order, s.serving && s.serving.order);
       base.serving.base = merge(defaultServing().base, s.serving && s.serving.base);
+      if (base.sv < SETTINGS_VERSION) {
+        /* 처음 넣었던 배식 기본값을 실제 부대 값으로 한 번 맞춘다.
+         * 설정에서 손대면 그때 저장되므로 다시 덮어쓰지 않는다.
+         */
+        base.serving = defaultServing();
+        base.sv = SETTINGS_VERSION;
+        migrated = true;
+      }
       base.times = merge(defaultTimes(), s.times);
       base.duties.forEach(function (d) {
         if (typeof d.report !== 'boolean') d.report = true;

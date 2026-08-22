@@ -959,6 +959,7 @@
       seg.appendChild(h('button', {
         class: 'seg-btn seg-2', 'aria-pressed': UI.todayOffset === pg.off ? 'true' : 'false',
         onclick: function () {
+          if (pg.off !== UI.todayOffset) pushNav();
           UI.todayOffset = pg.off;
           render();
           window.scrollTo(0, 0);
@@ -3013,13 +3014,80 @@
   ];
 
   function go(tab) {
+    if (tab !== UI.tab) pushNav();
     UI.tab = tab;
-    if (location.hash !== '#' + tab) {
-      history.replaceState(null, '', '#' + tab);
-    }
+    syncHash();
     render();
     window.scrollTo(0, 0);
   }
+
+  /* ==================== 뒤로가기 ====================
+   * 히스토리에 [뿌리, 가드] 두 칸만 유지한다. 폰의 뒤로가기를 누르면
+   * 가드가 빠지면서 popstate 가 오고, 그때 무엇을 되돌릴지 정한 뒤
+   * 가드를 다시 쌓는다. 오늘 화면에서 한 번 더 누르면 가드를 다시
+   * 쌓지 않고 뿌리 아래로 내려가 앱이 닫힌다.
+   */
+
+  var navStack = [];    // 지나온 화면
+  var exitArmed = 0;    // 종료 안내를 띄운 시각
+
+  function pushNav() {
+    navStack.push({ tab: UI.tab, off: UI.todayOffset });
+    if (navStack.length > 30) navStack.shift();
+    exitArmed = 0;
+  }
+
+  function syncHash() {
+    try {
+      history.replaceState(history.state, '', '#' + UI.tab);
+    } catch (e) { /* file:// 등에서 막히면 주소만 안 바뀐다 */ }
+  }
+
+  function guardPush() {
+    try {
+      history.pushState({ e1: 'guard' }, '', '#' + UI.tab);
+    } catch (e) { /* 무시 */ }
+  }
+
+  function initHistory() {
+    try {
+      history.replaceState({ e1: 'root' }, '', '#' + UI.tab);
+    } catch (e) { /* 무시 */ }
+    guardPush();
+  }
+
+  window.addEventListener('popstate', function () {
+    /* 1. 열린 팝업이 있으면 맨 위 것부터 닫는다 */
+    var sheets = document.querySelectorAll('.sheet-back');
+    if (sheets.length) {
+      sheets[sheets.length - 1].remove();
+      guardPush();
+      return;
+    }
+
+    /* 2. 오늘 화면이 아니면 지나온 화면으로 되돌아간다 */
+    if (UI.tab !== 'today' || UI.todayOffset !== 0) {
+      var prev = navStack.pop() || { tab: 'today', off: 0 };
+      UI.tab = prev.tab;
+      UI.todayOffset = prev.off || 0;
+      exitArmed = 0;
+      syncHash();
+      render();
+      window.scrollTo(0, 0);
+      guardPush();
+      return;
+    }
+
+    /* 3. 오늘 화면 — 두 번 눌러야 나간다 */
+    var now = Date.now();
+    if (exitArmed && now - exitArmed < 2500) {
+      history.back();
+      return;
+    }
+    exitArmed = now;
+    toast('뒤로가기를 한 번 더 누르면 종료됩니다');
+    guardPush();
+  });
 
   function render() {
     var tab = TABS.filter(function (t) { return t.id === UI.tab; })[0] || TABS[0];
@@ -3060,14 +3128,6 @@
     });
   }
 
-  window.addEventListener('hashchange', function () {
-    var t = location.hash.replace('#', '');
-    if (TABS.some(function (x) { return x.id === t; })) {
-      UI.tab = t;
-      render();
-    }
-  });
-
   /* 자정을 넘기거나 앱을 다시 열면 오늘 기준을 갱신 */
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) render();
@@ -3079,6 +3139,7 @@
   var initial = location.hash.replace('#', '');
   if (TABS.some(function (x) { return x.id === initial; })) UI.tab = initial;
   render();
+  initHistory();
 
   /* 서비스 워커: 오프라인 캐시 */
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
